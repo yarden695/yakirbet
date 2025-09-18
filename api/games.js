@@ -297,15 +297,16 @@ async function fetchAllSportsWithPriority(filters) {
         throw new Error('No sports available from Odds-API.io');
     }
     
-    // Filter sports based on our priority and request
+    // Safely filter sports based on our priority and request
     let targetSports = availableSports;
     
-    if (filters.sport) {
+    if (filters.sport && typeof filters.sport === 'string') {
         const sportFilter = filters.sport.toLowerCase();
-        targetSports = availableSports.filter(sport => 
-            sport.key.toLowerCase().includes(sportFilter) ||
-            sport.title.toLowerCase().includes(sportFilter)
-        );
+        targetSports = availableSports.filter(sport => {
+            if (!sport || !sport.key || !sport.title) return false;
+            return sport.key.toLowerCase().includes(sportFilter) ||
+                   sport.title.toLowerCase().includes(sportFilter);
+        });
     } else {
         // Prioritize major betting sports
         targetSports = prioritizeSports(availableSports);
@@ -315,20 +316,26 @@ async function fetchAllSportsWithPriority(filters) {
     
     // Process sports with smart batching
     for (const sport of targetSports.slice(0, 15)) { // Limit to prevent timeout
+        // Validate sport object
+        if (!sport || !sport.key || typeof sport.key !== 'string') {
+            console.log('⚠️ Invalid sport object:', sport);
+            continue;
+        }
+        
         if (!checkRateLimit()) {
             console.log('⚠️ Rate limit reached during processing');
             break;
         }
         
         try {
-            console.log(`⚽ Processing ${sport.title} (${sport.key})...`);
+            console.log(`⚽ Processing ${sport.title || sport.key} (${sport.key})...`);
             
             const sportGames = await fetchGamesForSport(sport.key, filters);
             if (sportGames && sportGames.length > 0) {
                 allGames.push(...sportGames);
                 sportsProcessed++;
                 
-                console.log(`✅ ${sport.title}: ${sportGames.length} games`);
+                console.log(`✅ ${sport.title || sport.key}: ${sportGames.length} games`);
             }
             
             // Smart delay based on API load
@@ -336,9 +343,9 @@ async function fetchAllSportsWithPriority(filters) {
             await delay(delayTime);
             
         } catch (error) {
-            console.log(`❌ Error processing ${sport.title}: ${error.message}`);
+            console.log(`❌ Error processing ${sport.title || sport.key}: ${error.message}`);
             errors.push({
-                sport: sport.title,
+                sport: sport.title || sport.key,
                 sport_key: sport.key,
                 error: error.message,
                 timestamp: new Date().toISOString()
@@ -463,9 +470,22 @@ async function fetchGamesForSport(sportKey, filters) {
 
 // Process an event into game format with odds
 async function processEventToGame(event, sportKey) {
+    // Safely extract event data with fallbacks
     const homeTeam = event.home || event.home_team || 'Home Team';
     const awayTeam = event.away || event.away_team || 'Away Team';
     const commenceTime = event.date || event.commence_time || new Date().toISOString();
+    
+    // Validate event data
+    if (!event.id) {
+        console.log('⚠️ Event missing ID:', event);
+        return null;
+    }
+    
+    // Ensure sportKey is valid
+    if (!sportKey || typeof sportKey !== 'string') {
+        console.log('⚠️ Invalid sportKey for event:', event.id);
+        sportKey = 'unknown_sport';
+    }
     
     // Determine if game is live
     const now = new Date();
@@ -604,13 +624,20 @@ function generateRealisticBookmakers(homeTeam, awayTeam, sport) {
 }
 
 function createDefaultOutcomes(homeTeam, awayTeam, sport) {
+    // Ensure we have valid team names
+    const home = homeTeam || 'Home Team';
+    const away = awayTeam || 'Away Team';
+    
     const outcomes = [
-        { name: homeTeam, price: generateRealisticOdds(1.6, 3.2) },
-        { name: awayTeam, price: generateRealisticOdds(1.6, 3.2) }
+        { name: home, price: generateRealisticOdds(1.6, 3.2) },
+        { name: away, price: generateRealisticOdds(1.6, 3.2) }
     ];
     
-    // Add draw for sports that can have draws
-    if (!['basketball', 'tennis', 'baseball', 'americanfootball', 'mma', 'boxing'].includes(sport.toLowerCase())) {
+    // Add draw for sports that can have draws - with safe string checking
+    const sportLower = (sport && typeof sport === 'string') ? sport.toLowerCase() : '';
+    const noDrawSports = ['basketball', 'tennis', 'baseball', 'americanfootball', 'mma', 'boxing'];
+    
+    if (sportLower && !noDrawSports.includes(sportLower)) {
         outcomes.push({ name: 'Draw', price: generateRealisticOdds(2.8, 4.2) });
     }
     
@@ -668,6 +695,11 @@ function getTimeUntilStart(commenceTime) {
 }
 
 function extractBaseSport(sportKey) {
+    if (!sportKey || typeof sportKey !== 'string') {
+        console.log('⚠️ Invalid sportKey:', sportKey);
+        return 'unknown';
+    }
+    
     const key = sportKey.toLowerCase();
     if (key.includes('soccer')) return 'soccer';
     if (key.includes('basketball')) return 'basketball';
@@ -678,10 +710,14 @@ function extractBaseSport(sportKey) {
     if (key.includes('mma') || key.includes('boxing')) return 'mma';
     if (key.includes('golf')) return 'golf';
     if (key.includes('cricket')) return 'cricket';
-    return sportKey.split('_')[0]; // fallback
+    return sportKey.split('_')[0] || 'unknown'; // fallback
 }
 
 function extractLeague(sportKey) {
+    if (!sportKey || typeof sportKey !== 'string') {
+        return 'Unknown League';
+    }
+    
     const key = sportKey.toLowerCase();
     if (key.includes('epl')) return 'Premier League';
     if (key.includes('champs_league')) return 'Champions League';
@@ -699,23 +735,36 @@ function extractLeague(sportKey) {
 }
 
 function formatSportTitle(sportKey) {
+    if (!sportKey || typeof sportKey !== 'string') {
+        return 'Unknown Sport';
+    }
     return sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
 function prioritizeSports(availableSports) {
+    // Ensure availableSports is an array and each sport has required properties
+    if (!Array.isArray(availableSports)) {
+        console.log('⚠️ availableSports is not an array:', availableSports);
+        return [];
+    }
+
     const priority1 = availableSports.filter(s => 
-        s.key.includes('soccer') || s.key.includes('basketball') || s.key.includes('nba')
+        s && s.key && typeof s.key === 'string' && 
+        (s.key.includes('soccer') || s.key.includes('basketball') || s.key.includes('nba'))
     );
     
     const priority2 = availableSports.filter(s => 
-        s.key.includes('football') || s.key.includes('tennis') || s.key.includes('baseball')
+        s && s.key && typeof s.key === 'string' &&
+        (s.key.includes('football') || s.key.includes('tennis') || s.key.includes('baseball'))
     );
     
     const priority3 = availableSports.filter(s => 
-        s.key.includes('hockey') || s.key.includes('mma') || s.key.includes('golf')
+        s && s.key && typeof s.key === 'string' &&
+        (s.key.includes('hockey') || s.key.includes('mma') || s.key.includes('golf'))
     );
     
     const others = availableSports.filter(s => 
+        s && s.key && typeof s.key === 'string' &&
         !priority1.includes(s) && !priority2.includes(s) && !priority3.includes(s)
     );
     
