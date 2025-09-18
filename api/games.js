@@ -372,33 +372,67 @@ async function fetchAllSportsWithPriority(filters) {
     };
 }
 
-// Get sports list with caching
+// Get sports list with caching and better error handling
 async function getSportsFromAPI() {
     // Return cached sports if valid
     if (isCacheValid(enhancedCache.sports, new Date())) {
+        console.log('📋 Using cached sports list');
         return enhancedCache.sports.data;
     }
     
     if (!checkRateLimit()) {
-        return enhancedCache.sports.data; // Return stale if rate limited
+        console.log('⚠️ Rate limited, using cached sports if available');
+        return enhancedCache.sports.data || []; // Return cached or empty
     }
     
     try {
         console.log('📋 Fetching sports list from Odds-API.io...');
         
-        // Use odds-api.io endpoint
-        const response = await fetch(`https://api.odds-api.io/v3/sports?apiKey=${ODDS_API_KEY}`, {
-            headers: { 'Accept': 'application/json' },
-            timeout: 8000
-        });
+        // Try both API endpoints
+        let response;
+        let sports;
         
-        incrementRateLimit();
-        
-        if (!response.ok) {
-            throw new Error(`Sports API returned ${response.status}`);
+        try {
+            // Try v4 API first
+            response = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}`, {
+                headers: { 'Accept': 'application/json' },
+                timeout: 8000
+            });
+            
+            incrementRateLimit();
+            
+            if (response.ok) {
+                sports = await response.json();
+                console.log(`✅ Got ${sports.length} sports from v4 API`);
+            } else {
+                throw new Error(`V4 API returned ${response.status}`);
+            }
+        } catch (v4Error) {
+            console.log('⚠️ V4 API failed, trying odds-api.io v3:', v4Error.message);
+            
+            // Fallback to odds-api.io v3
+            if (checkRateLimit()) {
+                response = await fetch(`https://api.odds-api.io/v3/sports?apiKey=${ODDS_API_KEY}`, {
+                    headers: { 'Accept': 'application/json' },
+                    timeout: 8000
+                });
+                
+                incrementRateLimit();
+                
+                if (response.ok) {
+                    sports = await response.json();
+                    console.log(`✅ Got ${sports.length} sports from v3 API`);
+                } else {
+                    throw new Error(`V3 API also returned ${response.status}`);
+                }
+            }
         }
         
-        const sports = await response.json();
+        // If no sports found, create fallback list
+        if (!sports || sports.length === 0) {
+            console.log('⚠️ No sports from API, using fallback list');
+            sports = createFallbackSportsList();
+        }
         
         // Cache the sports list
         const now = new Date();
@@ -408,13 +442,42 @@ async function getSportsFromAPI() {
             expires: new Date(now.getTime() + CACHE_CONFIG.SPORTS_LIST)
         };
         
-        console.log(`✅ Got ${sports.length} available sports`);
+        console.log(`✅ Cached ${sports.length} available sports`);
         return sports;
         
     } catch (error) {
         console.error('❌ Failed to fetch sports list:', error.message);
-        return enhancedCache.sports.data || []; // Return cached or empty
+        
+        // Return cached data if available
+        if (enhancedCache.sports.data) {
+            console.log('📋 Using stale cached sports data');
+            return enhancedCache.sports.data;
+        }
+        
+        // Last resort - return fallback sports list
+        console.log('📋 Using fallback sports list');
+        return createFallbackSportsList();
     }
+}
+
+// Create fallback sports list when API fails
+function createFallbackSportsList() {
+    return [
+        { key: 'soccer_epl', title: 'EPL', group: 'Soccer' },
+        { key: 'soccer_uefa_champs_league', title: 'UEFA Champions League', group: 'Soccer' },
+        { key: 'soccer_spain_la_liga', title: 'La Liga', group: 'Soccer' },
+        { key: 'soccer_italy_serie_a', title: 'Serie A', group: 'Soccer' },
+        { key: 'soccer_germany_bundesliga', title: 'Bundesliga', group: 'Soccer' },
+        { key: 'basketball_nba', title: 'NBA', group: 'Basketball' },
+        { key: 'basketball_euroleague', title: 'EuroLeague', group: 'Basketball' },
+        { key: 'americanfootball_nfl', title: 'NFL', group: 'American Football' },
+        { key: 'tennis_atp', title: 'ATP', group: 'Tennis' },
+        { key: 'tennis_wta', title: 'WTA', group: 'Tennis' },
+        { key: 'baseball_mlb', title: 'MLB', group: 'Baseball' },
+        { key: 'icehockey_nhl', title: 'NHL', group: 'Ice Hockey' },
+        { key: 'mma_mixed_martial_arts', title: 'MMA', group: 'Mixed Martial Arts' },
+        { key: 'boxing_heavyweight', title: 'Boxing', group: 'Boxing' }
+    ];
 }
 
 // Fetch games for a specific sport
