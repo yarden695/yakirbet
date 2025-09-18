@@ -104,16 +104,28 @@ async function fetchFromCorrectOddsApiIo() {
     // Base URL for Odds-API.io v3
     const baseUrl = 'https://api.odds-api.io/v3';
     
-    // Sports to try (common sport names)
-    const sportsToTry = [
-        'Football',
-        'Basketball',
-        'Soccer', 
-        'Tennis',
-        'American Football'
+    // First, try to get available sports/leagues
+    let availableSports = [];
+    
+    // Try common sport slug formats that might work
+    const sportSlugsToTry = [
+        'football',
+        'basketball',
+        'soccer',
+        'tennis',
+        'american-football',
+        'premier-league',
+        'champions-league',
+        'nba',
+        'nfl',
+        'la-liga',
+        'serie-a',
+        'bundesliga',
+        'ligue-1',
+        'epl'
     ];
 
-    console.log('Starting Odds-API.io data fetch...');
+    console.log('Starting Odds-API.io data fetch with correct sport slugs...');
 
     // Step 1: Try to get bookmakers first (to verify API key works)
     try {
@@ -137,7 +149,7 @@ async function fetchFromCorrectOddsApiIo() {
         } else {
             const errorText = await bookmakersResponse.text();
             console.log('❌ Bookmakers endpoint failed:', errorText);
-            throw new Error(`Bookmakers API failed: ${bookmakersResponse.status} - ${errorText}`);
+            // Don't throw error, continue with sport slugs
         }
     } catch (bookmakersError) {
         console.error('Bookmakers test failed:', bookmakersError.message);
@@ -146,18 +158,13 @@ async function fetchFromCorrectOddsApiIo() {
             error: bookmakersError.message,
             timestamp: new Date().toISOString()
         });
-        
-        // If API key doesn't work at all, return early
-        if (bookmakersError.message.includes('401') || bookmakersError.message.includes('403')) {
-            throw new Error('API key authentication failed');
-        }
     }
 
-    // Step 2: Get events for each sport
-    for (const sport of sportsToTry) {
+    // Step 2: Try different sport slug formats
+    for (const sportSlug of sportSlugsToTry) {
         try {
-            console.log(`Step 2: Getting events for ${sport}...`);
-            const eventsUrl = `${baseUrl}/events?sport=${sport}&apiKey=${ODDS_API_KEY}`;
+            console.log(`Step 2: Getting events for ${sportSlug}...`);
+            const eventsUrl = `${baseUrl}/events?sport=${sportSlug}&apiKey=${ODDS_API_KEY}`;
             console.log(`Events URL: ${eventsUrl.replace(ODDS_API_KEY, 'HIDDEN')}`);
             
             totalApiCalls++;
@@ -168,14 +175,14 @@ async function fetchFromCorrectOddsApiIo() {
                 }
             });
 
-            console.log(`Events response for ${sport}:`, eventsResponse.status);
+            console.log(`Events response for ${sportSlug}:`, eventsResponse.status);
 
             if (!eventsResponse.ok) {
                 const errorText = await eventsResponse.text();
-                console.log(`Events failed for ${sport}:`, errorText);
+                console.log(`Events failed for ${sportSlug}:`, errorText);
                 
                 errors.push({
-                    sport: sport,
+                    sport: sportSlug,
                     step: 'events',
                     error: `HTTP ${eventsResponse.status}: ${errorText}`,
                     timestamp: new Date().toISOString()
@@ -184,21 +191,24 @@ async function fetchFromCorrectOddsApiIo() {
             }
 
             const events = await eventsResponse.json();
-            console.log(`Got events for ${sport}:`, Array.isArray(events) ? events.length : 'not array');
+            console.log(`Got events for ${sportSlug}:`, Array.isArray(events) ? events.length : 'not array');
 
             if (!Array.isArray(events) || events.length === 0) {
-                console.log(`No events found for ${sport}`);
+                console.log(`No events found for ${sportSlug}`);
                 continue;
             }
 
+            // SUCCESS! We found a working sport slug
+            console.log(`✅ SUCCESS: Found ${events.length} events for sport slug: ${sportSlug}`);
+            
             // Process events and try to get odds for each
             const limitedEvents = events.slice(0, 5); // Limit to prevent timeout
-            console.log(`Processing ${limitedEvents.length} events for ${sport}...`);
+            console.log(`Processing ${limitedEvents.length} events for ${sportSlug}...`);
 
             for (const event of limitedEvents) {
                 try {
                     // Create game object from event
-                    const processedGame = await processEventToGame(event, sport, baseUrl, totalApiCalls);
+                    const processedGame = await processEventToGame(event, sportSlug, baseUrl, totalApiCalls);
                     if (processedGame) {
                         allGames.push(processedGame.game);
                         totalApiCalls = processedGame.apiCalls;
@@ -212,19 +222,22 @@ async function fetchFromCorrectOddsApiIo() {
                 }
             }
 
-            // If we have enough games, stop trying more sports
-            if (allGames.length >= 10) {
-                console.log('Got enough games, stopping early');
-                break;
+            // If we have games from this sport, try one more sport slug then stop
+            if (allGames.length > 0) {
+                console.log(`Got ${allGames.length} games from ${sportSlug}, trying one more sport...`);
+                // Continue to try one more sport for variety
+                if (allGames.length >= 5) {
+                    break;
+                }
             }
 
             // Delay between sports
             await new Promise(resolve => setTimeout(resolve, 500));
 
         } catch (sportError) {
-            console.error(`Error with sport ${sport}:`, sportError.message);
+            console.error(`Error with sport ${sportSlug}:`, sportError.message);
             errors.push({
-                sport: sport,
+                sport: sportSlug,
                 step: 'sport_processing',
                 error: sportError.message,
                 timestamp: new Date().toISOString()
