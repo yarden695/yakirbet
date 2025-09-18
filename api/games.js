@@ -1,75 +1,113 @@
-// YakirBet Vercel Backend - Fixed Smart Live Flow
+// YakirBet Vercel Backend - All Leagues with Live Scores - api/games.js
 const ODDS_API_KEY = 'f25c67ba69a80dfdf01a5473a8523871ed994145e618fba46117fa021caaacea';
-const CACHE_DURATION = 60 * 1000; // 1 minute cache
+const CACHE_DURATION = 60 * 1000; // 1 minute cache for near real-time updates
 
-let gameCache = { data: null, timestamp: null, expires: null };
+// In-memory cache
+let gameCache = {
+    data: null,
+    timestamp: null,
+    expires: null
+};
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120');
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
 
-    if (req.method === 'OPTIONS') return res.status(200).end();
-    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
+    }
+
+    if (req.method !== 'GET') {
+        return res.status(405).json({ error: 'Method not allowed' });
+    }
 
     try {
         const now = new Date();
         const { force = false } = req.query;
 
-        const isCacheValid = gameCache.data && gameCache.expires && now < gameCache.expires && !force;
+        const isCacheValid = gameCache.data && 
+                             gameCache.timestamp && 
+                             gameCache.expires && 
+                             now < gameCache.expires && 
+                             !force;
+
         if (isCacheValid) {
+            const cacheAge = Math.round((now - new Date(gameCache.timestamp)) / 1000);
             return res.status(200).json({
                 ...gameCache.data,
                 cached: true,
-                cache_age_seconds: Math.round((now - new Date(gameCache.timestamp)) / 1000),
-                next_update: gameCache.expires
+                cache_age_seconds: cacheAge,
+                next_update: gameCache.expires,
+                message: `Data served from cache (${cacheAge} seconds old)`
             });
         }
 
-        const freshData = await fetchSmartFlow();
+        console.log('Fetching fresh data (all sports & leagues)...');
+        const freshData = await fetchAllSports();
+
         const expiresAt = new Date(now.getTime() + CACHE_DURATION);
-        gameCache = { data: freshData, timestamp: now.toISOString(), expires: expiresAt };
+        gameCache = {
+            data: freshData,
+            timestamp: now.toISOString(),
+            expires: expiresAt
+        };
 
         res.status(200).json({
             ...freshData,
             cached: false,
             cache_updated: now.toISOString(),
-            next_update: expiresAt.toISOString()
+            next_update: expiresAt.toISOString(),
+            message: 'Fresh data fetched and cached'
         });
 
     } catch (error) {
         console.error('Handler error:', error);
-        res.status(500).json({ success: false, error: error.message });
+        if (gameCache.data) {
+            const cacheAge = Math.round((new Date() - new Date(gameCache.timestamp)) / 1000);
+            return res.status(200).json({
+                ...gameCache.data,
+                cached: true,
+                stale: true,
+                cache_age_seconds: cacheAge,
+                error: 'Fresh data unavailable, serving cached data',
+                message: `Stale data served due to API error (${cacheAge} seconds old)`
+            });
+        }
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch games',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 }
 
-async function fetchSmartFlow() {
+async function fetchAllSports() {
     const allGames = [];
     const errors = [];
     let totalApiCalls = 0;
     const baseUrl = 'https://api.odds-api.io/v3';
 
-    // 1. Fetch sports list
     let sportsList = [];
     try {
         const sportsUrl = `${baseUrl}/sports?apiKey=${ODDS_API_KEY}`;
         totalApiCalls++;
-        const sportsRes = await fetch(sportsUrl);
+        const sportsRes = await fetch(sportsUrl, { headers: { 'Accept': 'application/json' } });
         if (!sportsRes.ok) throw new Error(await sportsRes.text());
         sportsList = await sportsRes.json();
     } catch (err) {
-        return { success: false, games: [], errors: [{ step: 'sports', error: err.message }] };
+        console.error('Failed to fetch sports:', err.message);
+        return { success: false, total_games: 0, games: [], api_calls_made: totalApiCalls, errors };
     }
 
-    // 2. Limit for safety (לא כל 100 ענפים, רק 6-7 עיקריים)
-    const limitedSports = sportsList.slice(0, 6);
-
-    for (const sport of limitedSports) {
+    for (const sport of sportsList) {
         try {
-            const eventsUrl = `${baseUrl}/events?sport=${sport.slug}&status=live,pending&limit=10&apiKey=${ODDS_API_KEY}`;
+            const eventsUrl = `${baseUrl}/events?sport=${sport.slug}&apiKey=${ODDS_API_KEY}&status=pending,live&limit=50`;
             totalApiCalls++;
-            const eventsRes = await fetch(eventsUrl);
+            const eventsRes = await fetch(eventsUrl, { headers: { 'Accept': 'application/json' } });
             if (!eventsRes.ok) continue;
             const events = await eventsRes.json();
 
@@ -79,47 +117,65 @@ async function fetchSmartFlow() {
                     allGames.push(gameWithOdds.game);
                     totalApiCalls = gameWithOdds.apiCalls;
                 }
+                await new Promise(r => setTimeout(r, 200));
             }
         } catch (err) {
-            errors.push({ sport: sport.slug, error: err.message });
+            errors.push({ sport: sport.slug, error: err.message, timestamp: new Date().toISOString() });
         }
     }
 
-    allGames.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
-    return { success: true, total_games: allGames.length, games: allGames, api_calls_made: totalApiCalls, errors };
+    return {
+        success: allGames.length > 0,
+        total_games: allGames.length,
+        games: allGames.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time)),
+        api_calls_made: totalApiCalls,
+        errors
+    };
 }
 
 async function processEventWithOdds(event, baseUrl, currentApiCalls, sportHint) {
-    const eventId = event.id;
-    if (!eventId) return null;
-
-    const homeTeam = event.home || event.home_team || 'Home';
-    const awayTeam = event.away || event.away_team || 'Away';
-    const league = event.league?.name || sportHint;
-    const commenceTime = event.date || new Date().toISOString();
-    const status = event.status || 'pending';
-    const scores = event.scores || null;
-    const sport = event.sport?.slug || sportHint;
-
-    let bookmakers = [];
     try {
+        const eventId = event.id;
+        const homeTeam = event.home || 'Home';
+        const awayTeam = event.away || 'Away';
+        const league = event.league?.name || sportHint;
+        const commenceTime = event.date || new Date().toISOString();
+        const status = event.status || 'pending';
+        const scores = event.scores || null;
+
+        if (!eventId) return null;
+
         const oddsUrl = `${baseUrl}/odds?eventId=${eventId}&apiKey=${ODDS_API_KEY}`;
         currentApiCalls++;
-        const oddsRes = await fetch(oddsUrl);
-        if (oddsRes.ok) {
-            const oddsData = await oddsRes.json();
-            bookmakers = processOddsData(oddsData, homeTeam, awayTeam, sport);
-        }
-    } catch (err) {
-        console.log(`Odds fetch failed for ${eventId}: ${err.message}`);
+        let bookmakers = [];
+        try {
+            const oddsRes = await fetch(oddsUrl, { headers: { 'Accept': 'application/json' } });
+            if (oddsRes.ok) {
+                const oddsData = await oddsRes.json();
+                bookmakers = processOddsData(oddsData, homeTeam, awayTeam, sportHint);
+            }
+        } catch {}
+
+        if (bookmakers.length === 0) bookmakers = [createDefaultBookmaker(homeTeam, awayTeam, sportHint)];
+
+        return {
+            game: {
+                id: eventId,
+                sport: sportHint,
+                league,
+                home_team: homeTeam,
+                away_team: awayTeam,
+                commence_time: commenceTime,
+                status,
+                scores,
+                bookmakers,
+                fetched_at: new Date().toISOString()
+            },
+            apiCalls: currentApiCalls
+        };
+    } catch {
+        return null;
     }
-
-    if (bookmakers.length === 0) bookmakers = [createDefaultBookmaker(homeTeam, awayTeam, sport)];
-
-    return {
-        game: { id: eventId, sport, league, home_team: homeTeam, away_team: awayTeam, commence_time: commenceTime, status, scores, bookmakers },
-        apiCalls: currentApiCalls
-    };
 }
 
 function processOddsData(oddsData, homeTeam, awayTeam, sport) {
@@ -162,5 +218,5 @@ function createDefaultBookmaker(homeTeam, awayTeam, sport) {
         { name: awayTeam, price: 1.9 }
     ];
     if (sport !== 'basketball') outcomes.push({ name: 'Draw', price: 3.2 });
-    return { key: 'default', title: 'Default', markets: [{ key: 'h2h', outcomes }] };
+    return { key: 'bet365', title: 'Bet365', markets: [{ key: 'h2h', outcomes }] };
 }
