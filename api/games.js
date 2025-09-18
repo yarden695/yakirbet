@@ -105,140 +105,73 @@ async function fetchUsingCorrectFlow() {
     
     console.log('Starting correct Odds-API.io flow...');
 
-    // Step 1: Try to get events without specifying sport (get all available events)
-    try {
-        console.log('Step 1: Getting all available events...');
-        const eventsUrl = `${baseUrl}/events?apiKey=${ODDS_API_KEY}`;
-        console.log(`Events URL: ${eventsUrl.replace(ODDS_API_KEY, 'HIDDEN')}`);
-        
-        totalApiCalls++;
-        const eventsResponse = await fetch(eventsUrl, {
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'YakirBet/1.0'
-            }
-        });
+    // Step 1 הוסר — לא מנסים יותר /events בלי sport
 
-        console.log(`All events response: ${eventsResponse.status}`);
-
-        if (eventsResponse.ok) {
-            const events = await eventsResponse.json();
-            console.log(`Got all events:`, Array.isArray(events) ? events.length : typeof events);
-
-            if (Array.isArray(events) && events.length > 0) {
-                console.log(`✅ SUCCESS: Found ${events.length} total events`);
-                
-                // Process limited number of events to prevent timeout
-                const limitedEvents = events.slice(0, 10);
-                console.log(`Processing ${limitedEvents.length} events...`);
-
-                for (const event of limitedEvents) {
-                    try {
-                        const gameWithOdds = await processEventWithOdds(event, baseUrl, totalApiCalls);
-                        if (gameWithOdds) {
-                            allGames.push(gameWithOdds.game);
-                            totalApiCalls = gameWithOdds.apiCalls;
-                        }
-                        
-                        // Small delay between requests
-                        await new Promise(resolve => setTimeout(resolve, 300));
-                        
-                    } catch (eventError) {
-                        console.log(`Error processing event ${event.id || 'unknown'}:`, eventError.message);
-                        errors.push({
-                            eventId: event.id,
-                            error: eventError.message,
-                            timestamp: new Date().toISOString()
-                        });
-                    }
+    // Step 2: Try specific sports
+    const sportsToTry = [
+        'soccer',
+        'basketball',
+        'americanfootball',
+        'baseball',
+        'icehockey',
+        'mma',
+        'boxing',
+        'tennis',
+        'cricket',
+        'esports'
+    ];
+    
+    for (const sport of sportsToTry) {
+        try {
+            console.log(`Trying events for sport: ${sport}...`);
+            const sportEventsUrl = `${baseUrl}/events?sport=${sport}&apiKey=${ODDS_API_KEY}`;
+            
+            totalApiCalls++;
+            const sportEventsResponse = await fetch(sportEventsUrl, {
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'YakirBet/1.0'
                 }
-            } else {
-                console.log('No events found or invalid format');
-            }
-        } else {
-            const errorText = await eventsResponse.text();
-            console.log(`All events failed: ${errorText}`);
-            throw new Error(`Events API failed: ${eventsResponse.status} - ${errorText}`);
-        }
-    } catch (eventsError) {
-        console.error('Failed to get events:', eventsError.message);
-        errors.push({
-            step: 'get_all_events',
-            error: eventsError.message,
-            timestamp: new Date().toISOString()
-        });
-    }
+            });
 
-    // Step 2: If no events from Step 1, try specific sports
-    if (allGames.length === 0) {
-        console.log('Step 2: Trying specific sports since no events found...');
-        
-        const sportsToTry = [
-            'soccer',
-            'basketball',
-            'americanfootball',
-            'baseball',
-            'icehockey',
-            'mma',
-            'boxing',
-            'tennis',
-            'cricket',
-            'esports'
-        ];
-        
-        for (const sport of sportsToTry) {
-            try {
-                console.log(`Trying events for sport: ${sport}...`);
-                const sportEventsUrl = `${baseUrl}/events?sport=${sport}&apiKey=${ODDS_API_KEY}`;
-                
-                totalApiCalls++;
-                const sportEventsResponse = await fetch(sportEventsUrl, {
-                    headers: {
-                        'Accept': 'application/json',
-                        'User-Agent': 'YakirBet/1.0'
-                    }
-                });
+            if (sportEventsResponse.ok) {
+                const sportEvents = await sportEventsResponse.json();
+                console.log(`Got events for ${sport}:`, Array.isArray(sportEvents) ? sportEvents.length : 'not array');
 
-                if (sportEventsResponse.ok) {
-                    const sportEvents = await sportEventsResponse.json();
-                    console.log(`Got events for ${sport}:`, Array.isArray(sportEvents) ? sportEvents.length : 'not array');
-
-                    if (Array.isArray(sportEvents) && sportEvents.length > 0) {
-                        console.log(`✅ Found events for ${sport}`);
-                        
-                        const limitedSportEvents = sportEvents.slice(0, 5);
-                        for (const event of limitedSportEvents) {
-                            try {
-                                const gameWithOdds = await processEventWithOdds(event, baseUrl, totalApiCalls, sport);
-                                if (gameWithOdds) {
-                                    allGames.push(gameWithOdds.game);
-                                    totalApiCalls = gameWithOdds.apiCalls;
-                                }
-                                
-                                await new Promise(resolve => setTimeout(resolve, 300));
-                                
-                            } catch (sportEventError) {
-                                console.log(`Error processing ${sport} event:`, sportEventError.message);
+                if (Array.isArray(sportEvents) && sportEvents.length > 0) {
+                    console.log(`✅ Found events for ${sport}`);
+                    
+                    const limitedSportEvents = sportEvents.slice(0, 5);
+                    for (const event of limitedSportEvents) {
+                        try {
+                            const gameWithOdds = await processEventWithOdds(event, baseUrl, totalApiCalls, sport);
+                            if (gameWithOdds) {
+                                allGames.push(gameWithOdds.game);
+                                totalApiCalls = gameWithOdds.apiCalls;
                             }
-                        }
-                        
-                        if (allGames.length > 0) {
-                            console.log(`Got games from ${sport}, continuing...`);
-                            // Continue to get more variety
+                            
+                            await new Promise(resolve => setTimeout(resolve, 300));
+                            
+                        } catch (sportEventError) {
+                            console.log(`Error processing ${sport} event:`, sportEventError.message);
                         }
                     }
+                    
+                    if (allGames.length > 0) {
+                        console.log(`Got games from ${sport}, continuing...`);
+                    }
                 }
-                
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-            } catch (sportError) {
-                console.error(`Error with sport ${sport}:`, sportError.message);
-                errors.push({
-                    sport: sport,
-                    error: sportError.message,
-                    timestamp: new Date().toISOString()
-                });
             }
+            
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+        } catch (sportError) {
+            console.error(`Error with sport ${sport}:`, sportError.message);
+            errors.push({
+                sport: sport,
+                error: sportError.message,
+                timestamp: new Date().toISOString()
+            });
         }
     }
 
@@ -258,7 +191,7 @@ async function fetchUsingCorrectFlow() {
         errors: errors.length > 0 ? errors : undefined,
         debug_info: {
             base_url: baseUrl,
-            flow_used: 'events_then_odds',
+            flow_used: 'events_by_sports_then_odds',
             endpoints_tried: ['/events', '/odds']
         }
     };
@@ -273,7 +206,6 @@ async function processEventWithOdds(event, baseUrl, currentApiCalls, sportHint) 
         const commenceTime = event.commence_time || event.start_time || new Date().toISOString();
         const sport = event.sport || sportHint || 'soccer';
 
-        // Skip if no real team names or event ID
         if (!eventId || !homeTeam || !awayTeam || homeTeam === 'Home' || awayTeam === 'Away') {
             console.log(`Skipping event - missing data: ID=${eventId}, Home=${homeTeam}, Away=${awayTeam}`);
             return null;
@@ -281,7 +213,6 @@ async function processEventWithOdds(event, baseUrl, currentApiCalls, sportHint) 
 
         console.log(`Getting odds for event: ${homeTeam} vs ${awayTeam} (ID: ${eventId})`);
 
-        // Step 2: Get odds for this specific event
         let bookmakers = [];
         try {
             const oddsUrl = `${baseUrl}/odds?eventId=${eventId}&apiKey=${ODDS_API_KEY}`;
@@ -301,7 +232,6 @@ async function processEventWithOdds(event, baseUrl, currentApiCalls, sportHint) 
                 const oddsData = await oddsResponse.json();
                 console.log(`Got odds data for ${eventId}:`, typeof oddsData);
 
-                // Process odds data based on API structure
                 bookmakers = processOddsData(oddsData, homeTeam, awayTeam, sport);
                 console.log(`Processed ${bookmakers.length} bookmakers for ${eventId}`);
             } else {
@@ -312,7 +242,6 @@ async function processEventWithOdds(event, baseUrl, currentApiCalls, sportHint) 
             console.log(`Could not get odds for event ${eventId}:`, oddsError.message);
         }
 
-        // If no bookmakers found, create default ones
         if (bookmakers.length === 0) {
             bookmakers = [createDefaultBookmaker(homeTeam, awayTeam, sport)];
             console.log(`Using default bookmaker for ${eventId}`);
@@ -345,9 +274,7 @@ function processOddsData(oddsData, homeTeam, awayTeam, sport) {
     const bookmakers = [];
     
     try {
-        // Handle different possible structures from /odds endpoint
         if (Array.isArray(oddsData)) {
-            // Array of bookmaker objects
             for (const bookmakerData of oddsData.slice(0, 3)) {
                 const processedBookmaker = processBookmakerData(bookmakerData, homeTeam, awayTeam, sport);
                 if (processedBookmaker) {
@@ -356,7 +283,6 @@ function processOddsData(oddsData, homeTeam, awayTeam, sport) {
             }
         } else if (oddsData && typeof oddsData === 'object') {
             if (oddsData.bookmakers && Array.isArray(oddsData.bookmakers)) {
-                // Object with bookmakers array
                 for (const bookmakerData of oddsData.bookmakers.slice(0, 3)) {
                     const processedBookmaker = processBookmakerData(bookmakerData, homeTeam, awayTeam, sport);
                     if (processedBookmaker) {
@@ -364,7 +290,6 @@ function processOddsData(oddsData, homeTeam, awayTeam, sport) {
                     }
                 }
             } else if (oddsData.odds) {
-                // Object with odds property
                 const processedBookmaker = processBookmakerData(oddsData, homeTeam, awayTeam, sport);
                 if (processedBookmaker) {
                     bookmakers.push(processedBookmaker);
@@ -387,7 +312,6 @@ function processBookmakerData(bookmakerData, homeTeam, awayTeam, sport) {
         const bookmakerName = bookmakerData.bookmaker || bookmakerData.name || bookmakerData.key || 'Bet365';
         const outcomes = [];
 
-        // Try different structures for odds
         if (bookmakerData.markets && Array.isArray(bookmakerData.markets)) {
             const market = bookmakerData.markets[0];
             if (market && market.outcomes) {
@@ -399,13 +323,11 @@ function processBookmakerData(bookmakerData, homeTeam, awayTeam, sport) {
                 }
             }
         } else if (bookmakerData.odds) {
-            // Direct odds object
             const oddsObj = bookmakerData.odds;
             if (oddsObj.home) outcomes.push({ name: homeTeam, price: parseFloat(oddsObj.home) });
             if (oddsObj.away) outcomes.push({ name: awayTeam, price: parseFloat(oddsObj.away) });
             if (oddsObj.draw && sport !== 'basketball') outcomes.push({ name: 'Draw', price: parseFloat(oddsObj.draw) });
         } else if (bookmakerData.home_odds) {
-            // Direct odds properties
             outcomes.push({ name: homeTeam, price: parseFloat(bookmakerData.home_odds) });
             outcomes.push({ name: awayTeam, price: parseFloat(bookmakerData.away_odds || 2.0) });
             if (bookmakerData.draw_odds && sport !== 'basketball') {
