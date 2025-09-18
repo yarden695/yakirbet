@@ -1,8 +1,7 @@
-// YakirBet Vercel Backend - Smart Live Flow
+// YakirBet Vercel Backend - Fixed Smart Live Flow
 const ODDS_API_KEY = 'f25c67ba69a80dfdf01a5473a8523871ed994145e618fba46117fa021caaacea';
-const CACHE_DURATION = 60 * 1000; // 1 minute cache (Live updates)
+const CACHE_DURATION = 60 * 1000; // 1 minute cache
 
-// In-memory cache
 let gameCache = { data: null, timestamp: null, expires: null };
 
 export default async function handler(req, res) {
@@ -24,14 +23,11 @@ export default async function handler(req, res) {
                 ...gameCache.data,
                 cached: true,
                 cache_age_seconds: Math.round((now - new Date(gameCache.timestamp)) / 1000),
-                next_update: gameCache.expires,
-                message: `Data served from cache`
+                next_update: gameCache.expires
             });
         }
 
-        console.log('Fetching fresh data (live & pending)...');
         const freshData = await fetchSmartFlow();
-
         const expiresAt = new Date(now.getTime() + CACHE_DURATION);
         gameCache = { data: freshData, timestamp: now.toISOString(), expires: expiresAt };
 
@@ -39,20 +35,11 @@ export default async function handler(req, res) {
             ...freshData,
             cached: false,
             cache_updated: now.toISOString(),
-            next_update: expiresAt.toISOString(),
-            message: 'Fresh data fetched and cached'
+            next_update: expiresAt.toISOString()
         });
+
     } catch (error) {
         console.error('Handler error:', error);
-        if (gameCache.data) {
-            return res.status(200).json({
-                ...gameCache.data,
-                cached: true,
-                stale: true,
-                error: 'Fresh data unavailable, serving cached data',
-                message: 'Stale data served due to API error'
-            });
-        }
         res.status(500).json({ success: false, error: error.message });
     }
 }
@@ -63,21 +50,24 @@ async function fetchSmartFlow() {
     let totalApiCalls = 0;
     const baseUrl = 'https://api.odds-api.io/v3';
 
-    // 1. Get all sports
+    // 1. Fetch sports list
     let sportsList = [];
     try {
         const sportsUrl = `${baseUrl}/sports?apiKey=${ODDS_API_KEY}`;
         totalApiCalls++;
         const sportsRes = await fetch(sportsUrl);
+        if (!sportsRes.ok) throw new Error(await sportsRes.text());
         sportsList = await sportsRes.json();
     } catch (err) {
         return { success: false, games: [], errors: [{ step: 'sports', error: err.message }] };
     }
 
-    // 2. For each sport → get live & pending events
-    for (const sport of sportsList) {
+    // 2. Limit for safety (לא כל 100 ענפים, רק 6-7 עיקריים)
+    const limitedSports = sportsList.slice(0, 6);
+
+    for (const sport of limitedSports) {
         try {
-            const eventsUrl = `${baseUrl}/events?sport=${sport.slug}&status=live,pending&apiKey=${ODDS_API_KEY}`;
+            const eventsUrl = `${baseUrl}/events?sport=${sport.slug}&status=live,pending&limit=10&apiKey=${ODDS_API_KEY}`;
             totalApiCalls++;
             const eventsRes = await fetch(eventsUrl);
             if (!eventsRes.ok) continue;
@@ -120,7 +110,9 @@ async function processEventWithOdds(event, baseUrl, currentApiCalls, sportHint) 
             const oddsData = await oddsRes.json();
             bookmakers = processOddsData(oddsData, homeTeam, awayTeam, sport);
         }
-    } catch {}
+    } catch (err) {
+        console.log(`Odds fetch failed for ${eventId}: ${err.message}`);
+    }
 
     if (bookmakers.length === 0) bookmakers = [createDefaultBookmaker(homeTeam, awayTeam, sport)];
 
@@ -134,12 +126,15 @@ function processOddsData(oddsData, homeTeam, awayTeam, sport) {
     const bookmakers = [];
     if (oddsData && oddsData.bookmakers) {
         for (const key of Object.keys(oddsData.bookmakers)) {
-            for (const bm of oddsData.bookmakers[key].slice(0, 2)) {
-                bookmakers.push({
-                    key: bm.name.toLowerCase().replace(/\s+/g, '_'),
-                    title: bm.name,
-                    markets: bm.odds ? [{ key: 'h2h', outcomes: buildOutcomes(bm.odds, homeTeam, awayTeam, sport) }] : []
-                });
+            const list = oddsData.bookmakers[key];
+            if (Array.isArray(list)) {
+                for (const bm of list.slice(0, 2)) {
+                    bookmakers.push({
+                        key: bm.name.toLowerCase().replace(/\s+/g, '_'),
+                        title: bm.name,
+                        markets: bm.odds ? [{ key: 'h2h', outcomes: buildOutcomes(bm.odds, homeTeam, awayTeam, sport) }] : []
+                    });
+                }
             }
         }
     }
