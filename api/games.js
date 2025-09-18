@@ -173,7 +173,18 @@ async function fetchUsingCorrectFlow() {
     if (allGames.length === 0) {
         console.log('Step 2: Trying specific sports since no events found...');
         
-        const sportsToTry = ['football', 'basketball', 'soccer'];
+        const sportsToTry = [
+            'soccer',
+            'basketball',
+            'americanfootball',
+            'baseball',
+            'icehockey',
+            'mma',
+            'boxing',
+            'tennis',
+            'cricket',
+            'esports'
+        ];
         
         for (const sport of sportsToTry) {
             try {
