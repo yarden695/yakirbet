@@ -1,78 +1,53 @@
-// YakirBet Enhanced Vercel Backend - Complete Sports Betting API
-// IMPORTANT: This is for educational/development purposes only
-// Always promote responsible gambling and set proper age verification in production
-
+// YakirBet Enhanced Backend - Based on Working Code + All Leagues
 const ODDS_API_KEY = 'f25c67ba69a80dfdf01a5473a8523871ed994145e618fba46117fa021caaacea';
+const CACHE_DURATION = 2 * 60 * 60 * 1000; // 2 hours - more frequent updates
 
-// Enhanced caching for real-time betting experience
-const CACHE_CONFIG = {
-    LIVE_GAMES: 30 * 1000,        // 30 seconds - like bet365/pinnacle
-    UPCOMING_TODAY: 2 * 60 * 1000, // 2 minutes - games today
-    UPCOMING_WEEK: 10 * 60 * 1000, // 10 minutes - games this week  
-    LONG_TERM: 30 * 60 * 1000,    // 30 minutes - games >1 week away
-    SPORTS_LIST: 60 * 60 * 1000,  // 1 hour - rarely changes
-    ERROR_RETRY: 30 * 1000        // 30 seconds retry on error
+// Simple cache like the working code
+let gameCache = {
+    data: null,
+    timestamp: null,
+    expires: null
 };
 
-// Smart API rate limiting (5000 calls per hour = max efficiency)
-const RATE_LIMIT = {
-    MAX_CALLS_PER_HOUR: 5000,
-    MAX_CALLS_PER_MINUTE: 75,     // Conservative buffer
-    CURRENT_HOUR_CALLS: 0,
-    CURRENT_MINUTE_CALLS: 0,
-    HOUR_RESET: null,
-    MINUTE_RESET: null,
-    PRIORITY_RESERVES: 500        // Reserve calls for live games
-};
-
-// Enhanced multi-tier cache system
-let enhancedCache = {
-    sports: { data: null, timestamp: null, expires: null },
-    liveGames: { data: [], timestamp: null, expires: null, priority: 1 },
-    todayGames: { data: [], timestamp: null, expires: null, priority: 2 },
-    weekGames: { data: [], timestamp: null, expires: null, priority: 3 },
-    longTermGames: { data: [], timestamp: null, expires: null, priority: 4 },
-    apiMetrics: {
-        totalCalls: 0,
-        cacheHits: 0,
-        errors: [],
-        lastSuccessfulFetch: null
-    }
-};
-
-// ALL major sports that betting sites offer
-const COMPREHENSIVE_SPORTS_LIST = [
-    // Top Priority (most betting volume)
-    'soccer', 'basketball', 'americanfootball', 'tennis',
-    // High Priority  
-    'baseball', 'hockey', 'mma', 'boxing',
-    // Medium Priority
-    'golf', 'cricket', 'rugby_union', 'aussierules',
-    // Additional Sports
-    'volleyball', 'handball', 'waterpolo', 'snooker'
+// All major sports and leagues we want to fetch
+const PRIORITY_SPORTS = [
+    // Soccer - All major leagues
+    'soccer_epl', 'soccer_uefa_champs_league', 'soccer_spain_la_liga', 
+    'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_france_ligue_one',
+    'soccer_uefa_europa_league', 'soccer_netherlands_eredivisie', 'soccer_portugal_primeira_liga',
+    'soccer_brazil_serie_a', 'soccer_argentina_primera_division', 'soccer_mexico_liga_mx',
+    
+    // Basketball
+    'basketball_nba', 'basketball_euroleague', 'basketball_ncaab',
+    'basketball_wnba', 'basketball_nbl',
+    
+    // American Football
+    'americanfootball_nfl', 'americanfootball_ncaaf',
+    
+    // Tennis
+    'tennis_atp', 'tennis_wta', 'tennis_challenger_men', 'tennis_challenger_women',
+    
+    // Baseball
+    'baseball_mlb', 'baseball_ncaa',
+    
+    // Hockey
+    'icehockey_nhl', 'icehockey_khl', 'icehockey_ncaa',
+    
+    // Combat Sports
+    'mma_mixed_martial_arts', 'boxing_heavyweight',
+    
+    // Other Popular Sports
+    'golf_pga_championship', 'golf_masters_tournament',
+    'cricket_big_bash', 'cricket_test_match',
+    'rugby_union_world_cup', 'aussierules_afl'
 ];
 
-// Odds-API.io sport mapping (they use different keys)
-const SPORT_KEY_MAPPING = {
-    'soccer': ['soccer_epl', 'soccer_uefa_champs_league', 'soccer_spain_la_liga', 'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_france_ligue_one'],
-    'basketball': ['basketball_nba', 'basketball_euroleague', 'basketball_ncaab'],
-    'americanfootball': ['americanfootball_nfl', 'americanfootball_ncaaf'],
-    'tennis': ['tennis_atp', 'tennis_wta', 'tennis_challenger_men'],
-    'baseball': ['baseball_mlb'],  
-    'hockey': ['icehockey_nhl', 'icehockey_khl'],
-    'mma': ['mma_mixed_martial_arts'],
-    'boxing': ['boxing_heavyweight'],
-    'golf': ['golf_pga_championship', 'golf_masters_tournament'],
-    'cricket': ['cricket_big_bash', 'cricket_test_match']
-};
-
 export default async function handler(req, res) {
-    // Enhanced CORS with security
+    // Simple CORS like working code
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=300');
-    res.setHeader('X-Powered-By', 'YakirBet-Enhanced');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
 
     if (req.method === 'OPTIONS') {
         res.status(200).end();
@@ -80,689 +55,335 @@ export default async function handler(req, res) {
     }
 
     if (req.method !== 'GET') {
-        return res.status(405).json({ 
-            error: 'Method not allowed', 
-            allowed_methods: ['GET', 'OPTIONS'] 
-        });
+        return res.status(405).json({ error: 'Method not allowed' });
     }
 
     try {
         const now = new Date();
-        const { 
-            sport, 
-            live = 'true', 
-            upcoming = 'true', 
-            longterm = 'true', 
-            force = 'false',
-            limit = '100'
-        } = req.query;
+        const { force = false } = req.query;
 
-        console.log(`🎯 YakirBet API Request: sport=${sport}, live=${live}, upcoming=${upcoming}`);
+        // Simple cache check like working code
+        const isCacheValid = gameCache.data && 
+                             gameCache.timestamp && 
+                             gameCache.expires && 
+                             now < gameCache.expires && 
+                             !force;
 
-        // Check if we're hitting rate limits
-        if (!checkRateLimit()) {
-            return res.status(429).json({
-                success: false,
-                error: 'Rate limit exceeded',
-                message: 'API calls limit reached, serving cached data if available',
-                retry_after_seconds: getSecondsUntilReset(),
-                rate_limit_info: getCurrentRateLimitInfo(),
-                cached_data_available: hasAnyValidCache()
+        if (isCacheValid) {
+            const cacheAge = Math.round((now - new Date(gameCache.timestamp)) / 1000 / 60);
+            return res.status(200).json({
+                ...gameCache.data,
+                cached: true,
+                cache_age_minutes: cacheAge,
+                next_update: gameCache.expires,
+                message: `Data served from cache (${cacheAge} minutes old)`
             });
         }
 
-        // Try to serve from cache first (unless forced)
-        if (force !== 'true') {
-            const cachedResponse = buildCachedResponse(now, { sport, live, upcoming, longterm });
-            if (cachedResponse && cachedResponse.games.length > 0) {
-                enhancedCache.apiMetrics.cacheHits++;
-                return res.status(200).json(cachedResponse);
-            }
-        }
+        console.log('Fetching fresh data from all leagues...');
+        const freshData = await fetchAllLeaguesData();
 
-        console.log('🔄 Fetching fresh data from Odds-API.io...');
-        const freshData = await fetchAllSportsWithPriority({ sport, live, upcoming, longterm, limit: parseInt(limit) });
-
-        // Update cache with fresh data
-        updateEnhancedCache(freshData, now);
-        
-        // Prepare comprehensive response
-        const response = {
-            success: true,
+        // Update cache
+        const expiresAt = new Date(now.getTime() + CACHE_DURATION);
+        gameCache = {
+            data: freshData,
             timestamp: now.toISOString(),
-            total_games: freshData.games.length,
-            games: freshData.games,
-            api_calls_used: RATE_LIMIT.CURRENT_HOUR_CALLS,
-            api_calls_remaining: RATE_LIMIT.MAX_CALLS_PER_HOUR - RATE_LIMIT.CURRENT_HOUR_CALLS,
-            rate_limit_info: getCurrentRateLimitInfo(),
-            cache_info: getCacheInfo(),
-            next_update_estimate: getNextUpdateEstimate(freshData.games),
-            sports_processed: freshData.sportsProcessed,
-            live_games_count: freshData.games.filter(g => g.is_live).length,
-            errors: freshData.errors.length > 0 ? freshData.errors.slice(-5) : undefined, // Last 5 errors only
-            data_freshness: 'live',
-            server_location: process.env.VERCEL_REGION || 'global'
+            expires: expiresAt
         };
 
-        res.status(200).json(response);
+        res.status(200).json({
+            ...freshData,
+            cached: false,
+            cache_updated: now.toISOString(),
+            next_update: expiresAt.toISOString(),
+            message: 'Fresh data fetched and cached'
+        });
 
     } catch (error) {
-        console.error('🚨 YakirBet API Error:', error);
+        console.error('Handler error:', error);
         
-        // Try to serve stale cache data on error
-        const staleData = getStaleEmergencyData();
-        if (staleData) {
+        // Serve stale cache if available
+        if (gameCache.data) {
+            const cacheAge = Math.round((new Date() - new Date(gameCache.timestamp)) / 1000 / 60);
             return res.status(200).json({
-                success: true,
-                ...staleData,
+                ...gameCache.data,
+                cached: true,
                 stale: true,
-                error_fallback: true,
-                message: 'Serving cached data due to API error',
-                original_error: error.message,
-                timestamp: new Date().toISOString()
+                cache_age_minutes: cacheAge,
+                error: 'Fresh data unavailable, serving cached data',
+                message: `Stale data served due to API error (${cacheAge} minutes old)`
             });
         }
-
-        // Last resort error response
-        res.status(500).json({
-            success: false,
-            error: 'Complete API failure',
-            message: error.message,
-            timestamp: new Date().toISOString(),
-            rate_limit_info: getCurrentRateLimitInfo(),
-            suggestions: [
-                'Try again in a few seconds',
-                'Check API key validity',
-                'Verify internet connection'
-            ]
-        });
-    }
-}
-
-// Enhanced rate limiting with smart priorities
-function checkRateLimit() {
-    const now = Date.now();
-    
-    // Reset counters
-    if (!RATE_LIMIT.HOUR_RESET || now >= RATE_LIMIT.HOUR_RESET) {
-        RATE_LIMIT.CURRENT_HOUR_CALLS = 0;
-        RATE_LIMIT.HOUR_RESET = now + (60 * 60 * 1000);
-        console.log('🔄 Hourly rate limit counter reset');
-    }
-    
-    if (!RATE_LIMIT.MINUTE_RESET || now >= RATE_LIMIT.MINUTE_RESET) {
-        RATE_LIMIT.CURRENT_MINUTE_CALLS = 0;
-        RATE_LIMIT.MINUTE_RESET = now + (60 * 1000);
-    }
-    
-    // Check limits with priority reserves
-    const hourlyAvailable = RATE_LIMIT.MAX_CALLS_PER_HOUR - RATE_LIMIT.CURRENT_HOUR_CALLS;
-    const minuteAvailable = RATE_LIMIT.MAX_CALLS_PER_MINUTE - RATE_LIMIT.CURRENT_MINUTE_CALLS;
-    
-    return hourlyAvailable > 0 && minuteAvailable > 0;
-}
-
-function incrementRateLimit() {
-    RATE_LIMIT.CURRENT_HOUR_CALLS++;
-    RATE_LIMIT.CURRENT_MINUTE_CALLS++;
-    enhancedCache.apiMetrics.totalCalls++;
-    
-    const usage = (RATE_LIMIT.CURRENT_HOUR_CALLS / RATE_LIMIT.MAX_CALLS_PER_HOUR) * 100;
-    if (usage > 80) {
-        console.log(`⚠️ High API usage: ${usage.toFixed(1)}% of hourly limit`);
-    }
-}
-
-// Smart cache response builder
-function buildCachedResponse(now, filters) {
-    const response = {
-        success: true,
-        games: [],
-        cached: true,
-        timestamp: now.toISOString(),
-        cache_age_seconds: 0,
-        data_sources: []
-    };
-    
-    let oldestCacheTime = now;
-    let hasValidData = false;
-    
-    // Collect from all cache tiers based on filters
-    if (filters.live === 'true' && isCacheValid(enhancedCache.liveGames, now)) {
-        response.games.push(...enhancedCache.liveGames.data);
-        response.data_sources.push('live_cache');
-        oldestCacheTime = Math.min(oldestCacheTime, new Date(enhancedCache.liveGames.timestamp));
-        hasValidData = true;
-    }
-    
-    if (filters.upcoming === 'true') {
-        if (isCacheValid(enhancedCache.todayGames, now)) {
-            response.games.push(...enhancedCache.todayGames.data);
-            response.data_sources.push('today_cache');
-            hasValidData = true;
-        }
         
-        if (isCacheValid(enhancedCache.weekGames, now)) {
-            response.games.push(...enhancedCache.weekGames.data);
-            response.data_sources.push('week_cache');
-            hasValidData = true;
-        }
+        // Last resort - return demo data
+        return res.status(200).json(createDemoFallback());
     }
-    
-    if (filters.longterm === 'true' && isCacheValid(enhancedCache.longTermGames, now)) {
-        response.games.push(...enhancedCache.longTermGames.data);
-        response.data_sources.push('longterm_cache');
-        hasValidData = true;
-    }
-    
-    if (!hasValidData) return null;
-    
-    // Filter by sport if specified
-    if (filters.sport) {
-        const sportFilter = filters.sport.toLowerCase();
-        response.games = response.games.filter(game => 
-            game.sport_key.toLowerCase().includes(sportFilter) ||
-            game.sport.toLowerCase().includes(sportFilter)
-        );
-    }
-    
-    // Remove duplicates and sort
-    response.games = removeDuplicateGames(response.games);
-    response.games.sort((a, b) => {
-        // Priority: Live games first, then by commence time
-        if (a.is_live && !b.is_live) return -1;
-        if (!a.is_live && b.is_live) return 1;
-        return new Date(a.commence_time) - new Date(b.commence_time);
-    });
-    
-    response.total_games = response.games.length;
-    response.cache_age_seconds = Math.round((now - oldestCacheTime) / 1000);
-    response.message = `Cached data served (${response.cache_age_seconds}s old)`;
-    
-    return response;
 }
 
-// Comprehensive sports fetching with intelligent prioritization
-async function fetchAllSportsWithPriority(filters) {
+async function fetchAllLeaguesData() {
     const allGames = [];
     const errors = [];
+    let totalApiCalls = 0;
     let sportsProcessed = 0;
-    const startTime = Date.now();
+    const baseUrl = 'https://api.odds-api.io/v3';
+
+    console.log('Step 1: Fetch all available sports...');
+    let availableSports = [];
     
-    console.log('🎯 Starting comprehensive sports fetch...');
-    
-    // Get available sports from API
-    const availableSports = await getSportsFromAPI();
-    if (!availableSports || availableSports.length === 0) {
-        throw new Error('No sports available from Odds-API.io');
-    }
-    
-    // Safely filter sports based on our priority and request
-    let targetSports = availableSports;
-    
-    if (filters.sport && typeof filters.sport === 'string') {
-        const sportFilter = filters.sport.toLowerCase();
-        targetSports = availableSports.filter(sport => {
-            if (!sport || !sport.key || !sport.title) return false;
-            return sport.key.toLowerCase().includes(sportFilter) ||
-                   sport.title.toLowerCase().includes(sportFilter);
+    try {
+        const sportsUrl = `${baseUrl}/sports?apiKey=${ODDS_API_KEY}`;
+        totalApiCalls++;
+        const sportsRes = await fetch(sportsUrl, { 
+            headers: { 'Accept': 'application/json' },
+            timeout: 10000 
         });
-    } else {
-        // Prioritize major betting sports
-        targetSports = prioritizeSports(availableSports);
+        
+        if (sportsRes.ok) {
+            availableSports = await sportsRes.json();
+            console.log(`Got ${availableSports.length} available sports from API`);
+        } else {
+            throw new Error(`Sports API returned ${sportsRes.status}`);
+        }
+    } catch (err) {
+        console.error('Failed to fetch sports from API:', err.message);
+        // Use our priority list as fallback
+        availableSports = PRIORITY_SPORTS.map(key => ({ slug: key, name: key.replace(/_/g, ' ') }));
+        console.log('Using fallback sports list with', availableSports.length, 'sports');
     }
-    
-    console.log(`🎰 Processing ${targetSports.length} sports...`);
-    
-    // Process sports with smart batching
-    for (const sport of targetSports.slice(0, 15)) { // Limit to prevent timeout
-        // Validate sport object
-        if (!sport || !sport.key || typeof sport.key !== 'string') {
-            console.log('⚠️ Invalid sport object:', sport);
-            continue;
-        }
-        
-        if (!checkRateLimit()) {
-            console.log('⚠️ Rate limit reached during processing');
-            break;
-        }
-        
+
+    // Filter to only our priority sports or use all if we have them
+    const sportsToFetch = availableSports.filter(sport => 
+        PRIORITY_SPORTS.includes(sport.slug) || 
+        PRIORITY_SPORTS.some(p => sport.slug?.includes(p.split('_')[0]))
+    );
+
+    console.log(`Step 2: Fetching events from ${sportsToFetch.length} sports...`);
+
+    // Process each sport - similar to working code
+    for (const sport of sportsToFetch.slice(0, 25)) { // Limit to prevent timeout
         try {
-            console.log(`⚽ Processing ${sport.title || sport.key} (${sport.key})...`);
+            console.log(`Fetching events for sport: ${sport.slug || sport}...`);
+            const sportSlug = sport.slug || sport;
             
-            const sportGames = await fetchGamesForSport(sport.key, filters);
-            if (sportGames && sportGames.length > 0) {
-                allGames.push(...sportGames);
-                sportsProcessed++;
-                
-                console.log(`✅ ${sport.title || sport.key}: ${sportGames.length} games`);
+            const eventsUrl = `${baseUrl}/events?sport=${sportSlug}&apiKey=${ODDS_API_KEY}&limit=15&status=pending,live`;
+            totalApiCalls++;
+            
+            const eventsRes = await fetch(eventsUrl, { 
+                headers: { 'Accept': 'application/json' },
+                timeout: 8000 
+            });
+            
+            if (!eventsRes.ok) {
+                console.log(`Failed events for ${sportSlug}: ${eventsRes.status}`);
+                continue;
             }
             
-            // Smart delay based on API load
-            const delayTime = calculateOptimalDelay();
-            await delay(delayTime);
+            const events = await eventsRes.json();
+            console.log(`Got ${events.length} events for ${sportSlug}`);
+
+            if (events && events.length > 0) {
+                // Process events for this sport
+                for (const event of events.slice(0, 8)) { // Max 8 per sport
+                    try {
+                        const gameData = await processEventWithOdds(event, baseUrl, sportSlug, totalApiCalls);
+                        if (gameData && gameData.game) {
+                            allGames.push(gameData.game);
+                            totalApiCalls = gameData.apiCalls;
+                        }
+                        await delay(200); // Small delay
+                    } catch (err) {
+                        console.log(`Error processing event for ${sportSlug}:`, err.message);
+                    }
+                }
+                sportsProcessed++;
+            }
             
-        } catch (error) {
-            console.log(`❌ Error processing ${sport.title || sport.key}: ${error.message}`);
-            errors.push({
-                sport: sport.title || sport.key,
-                sport_key: sport.key,
-                error: error.message,
-                timestamp: new Date().toISOString()
+            await delay(300); // Delay between sports
+            
+        } catch (err) {
+            console.error(`Error with sport ${sport.slug || sport}:`, err.message);
+            errors.push({ 
+                sport: sport.slug || sport, 
+                error: err.message, 
+                timestamp: new Date().toISOString() 
             });
         }
-        
-        // Timeout protection (max 25 seconds)
-        if (Date.now() - startTime > 25000) {
-            console.log('⏰ Timeout protection activated');
-            break;
-        }
     }
-    
-    // Post-process games
-    const processedGames = allGames.map(game => enhanceGameData(game));
-    
-    console.log(`🏁 Fetch complete: ${processedGames.length} games from ${sportsProcessed} sports`);
-    
+
+    // Sort games by commence time
+    allGames.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
+
+    console.log(`Fetch complete: ${allGames.length} games from ${sportsProcessed} sports`);
+
+    // If no games, provide demo data
+    if (allGames.length === 0) {
+        console.log('No games found, providing demo data');
+        return createDemoFallback();
+    }
+
     return {
-        games: removeDuplicateGames(processedGames),
-        sportsProcessed,
-        errors,
-        fetchTimeMs: Date.now() - startTime
+        success: true,
+        total_games: allGames.length,
+        games: allGames,
+        timestamp: new Date().toISOString(),
+        source: 'Odds-API.io',
+        api_calls_made: totalApiCalls,
+        sports_processed: sportsProcessed,
+        cache_duration_hours: CACHE_DURATION / (1000 * 60 * 60),
+        errors: errors.length > 0 ? errors.slice(-5) : undefined, // Last 5 errors only
+        debug_info: { 
+            base_url: baseUrl, 
+            sports_attempted: sportsToFetch.length,
+            priority_sports_count: PRIORITY_SPORTS.length 
+        }
     };
 }
 
-// Get sports list with caching and better error handling
-async function getSportsFromAPI() {
-    // Return cached sports if valid
-    if (isCacheValid(enhancedCache.sports, new Date())) {
-        console.log('📋 Using cached sports list');
-        return enhancedCache.sports.data;
-    }
-    
-    if (!checkRateLimit()) {
-        console.log('⚠️ Rate limited, using cached sports if available');
-        return enhancedCache.sports.data || []; // Return cached or empty
-    }
-    
+async function processEventWithOdds(event, baseUrl, sportHint, currentApiCalls) {
     try {
-        console.log('📋 Fetching sports list from Odds-API.io...');
+        const eventId = event.id;
+        const homeTeam = event.home || event.home_team || 'Home';
+        const awayTeam = event.away || event.away_team || 'Away';
+        const league = event.league?.name || formatLeagueName(sportHint);
+        const commenceTime = event.date || event.commence_time || new Date().toISOString();
+        const sport = event.sport?.slug || sportHint;
+
+        if (!eventId || !homeTeam || !awayTeam) return null;
+
+        console.log(`Getting odds for ${homeTeam} vs ${awayTeam} (ID: ${eventId})`);
         
-        // Try both API endpoints
-        let response;
-        let sports;
+        // Try to get odds - similar to working code
+        const oddsUrl = `${baseUrl}/odds?eventId=${eventId}&apiKey=${ODDS_API_KEY}`;
+        currentApiCalls++;
+        let bookmakers = [];
         
         try {
-            // Try v4 API first
-            response = await fetch(`https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_API_KEY}`, {
+            const oddsRes = await fetch(oddsUrl, { 
                 headers: { 'Accept': 'application/json' },
-                timeout: 8000
+                timeout: 5000 
             });
             
-            incrementRateLimit();
-            
-            if (response.ok) {
-                sports = await response.json();
-                console.log(`✅ Got ${sports.length} sports from v4 API`);
-            } else {
-                throw new Error(`V4 API returned ${response.status}`);
-            }
-        } catch (v4Error) {
-            console.log('⚠️ V4 API failed, trying odds-api.io v3:', v4Error.message);
-            
-            // Fallback to odds-api.io v3
-            if (checkRateLimit()) {
-                response = await fetch(`https://api.odds-api.io/v3/sports?apiKey=${ODDS_API_KEY}`, {
-                    headers: { 'Accept': 'application/json' },
-                    timeout: 8000
-                });
-                
-                incrementRateLimit();
-                
-                if (response.ok) {
-                    sports = await response.json();
-                    console.log(`✅ Got ${sports.length} sports from v3 API`);
-                } else {
-                    throw new Error(`V3 API also returned ${response.status}`);
-                }
-            }
-        }
-        
-        // If no sports found, create fallback list
-        if (!sports || sports.length === 0) {
-            console.log('⚠️ No sports from API, using fallback list');
-            sports = createFallbackSportsList();
-        }
-        
-        // Cache the sports list
-        const now = new Date();
-        enhancedCache.sports = {
-            data: sports,
-            timestamp: now.toISOString(),
-            expires: new Date(now.getTime() + CACHE_CONFIG.SPORTS_LIST)
-        };
-        
-        console.log(`✅ Cached ${sports.length} available sports`);
-        return sports;
-        
-    } catch (error) {
-        console.error('❌ Failed to fetch sports list:', error.message);
-        
-        // Return cached data if available
-        if (enhancedCache.sports.data) {
-            console.log('📋 Using stale cached sports data');
-            return enhancedCache.sports.data;
-        }
-        
-        // Last resort - return fallback sports list
-        console.log('📋 Using fallback sports list');
-        return createFallbackSportsList();
-    }
-}
-
-// Create fallback sports list when API fails
-function createFallbackSportsList() {
-    return [
-        { key: 'soccer_epl', title: 'EPL', group: 'Soccer' },
-        { key: 'soccer_uefa_champs_league', title: 'UEFA Champions League', group: 'Soccer' },
-        { key: 'soccer_spain_la_liga', title: 'La Liga', group: 'Soccer' },
-        { key: 'soccer_italy_serie_a', title: 'Serie A', group: 'Soccer' },
-        { key: 'soccer_germany_bundesliga', title: 'Bundesliga', group: 'Soccer' },
-        { key: 'basketball_nba', title: 'NBA', group: 'Basketball' },
-        { key: 'basketball_euroleague', title: 'EuroLeague', group: 'Basketball' },
-        { key: 'americanfootball_nfl', title: 'NFL', group: 'American Football' },
-        { key: 'tennis_atp', title: 'ATP', group: 'Tennis' },
-        { key: 'tennis_wta', title: 'WTA', group: 'Tennis' },
-        { key: 'baseball_mlb', title: 'MLB', group: 'Baseball' },
-        { key: 'icehockey_nhl', title: 'NHL', group: 'Ice Hockey' },
-        { key: 'mma_mixed_martial_arts', title: 'MMA', group: 'Mixed Martial Arts' },
-        { key: 'boxing_heavyweight', title: 'Boxing', group: 'Boxing' }
-    ];
-}
-
-// Fetch games for a specific sport
-async function fetchGamesForSport(sportKey, filters) {
-    if (!checkRateLimit()) {
-        throw new Error('Rate limit exceeded');
-    }
-    
-    try {
-        // Get events for this sport
-        const eventsUrl = `https://api.odds-api.io/v3/events?sport=${sportKey}&apiKey=${ODDS_API_KEY}&limit=20&status=pending,live`;
-        
-        const response = await fetch(eventsUrl, {
-            headers: { 'Accept': 'application/json' },
-            timeout: 8000
-        });
-        
-        incrementRateLimit();
-        
-        if (!response.ok) {
-            throw new Error(`Events API returned ${response.status} for ${sportKey}`);
-        }
-        
-        const events = await response.json();
-        if (!events || events.length === 0) {
-            return [];
-        }
-        
-        console.log(`📅 Got ${events.length} events for ${sportKey}`);
-        
-        // Process events to games
-        const games = [];
-        for (const event of events.slice(0, 8)) { // Limit per sport
-            try {
-                const gameData = await processEventToGame(event, sportKey);
-                if (gameData) {
-                    games.push(gameData);
-                }
-                
-                await delay(150); // Small delay between processing
-            } catch (err) {
-                console.log(`⚠️ Error processing event ${event.id}: ${err.message}`);
-            }
-        }
-        
-        return games;
-        
-    } catch (error) {
-        console.error(`❌ Error fetching games for ${sportKey}:`, error.message);
-        throw error;
-    }
-}
-
-// Process an event into game format with odds
-async function processEventToGame(event, sportKey) {
-    // Safely extract event data with fallbacks
-    const homeTeam = event.home || event.home_team || 'Home Team';
-    const awayTeam = event.away || event.away_team || 'Away Team';
-    const commenceTime = event.date || event.commence_time || new Date().toISOString();
-    
-    // Validate event data
-    if (!event.id) {
-        console.log('⚠️ Event missing ID:', event);
-        return null;
-    }
-    
-    // Ensure sportKey is valid
-    if (!sportKey || typeof sportKey !== 'string') {
-        console.log('⚠️ Invalid sportKey for event:', event.id);
-        sportKey = 'unknown_sport';
-    }
-    
-    // Determine if game is live
-    const now = new Date();
-    const gameTime = new Date(commenceTime);
-    const minutesFromStart = (now - gameTime) / (1000 * 60);
-    const isLive = minutesFromStart >= -5 && minutesFromStart <= 180; // 5 min before to 3 hours after
-    
-    // Try to get odds for this event
-    let bookmakers = [];
-    if (checkRateLimit()) {
-        try {
-            const oddsUrl = `https://api.odds-api.io/v3/odds?eventId=${event.id}&apiKey=${ODDS_API_KEY}`;
-            const oddsResponse = await fetch(oddsUrl, {
-                headers: { 'Accept': 'application/json' },
-                timeout: 5000
-            });
-            
-            incrementRateLimit();
-            
-            if (oddsResponse.ok) {
-                const oddsData = await oddsResponse.json();
-                bookmakers = processOddsToBookmakers(oddsData, homeTeam, awayTeam, sportKey);
+            if (oddsRes.ok) {
+                const oddsData = await oddsRes.json();
+                bookmakers = processOddsData(oddsData, homeTeam, awayTeam, sport);
             }
         } catch (err) {
-            console.log(`⚠️ No odds for event ${event.id}: ${err.message}`);
+            console.log(`Could not fetch odds for ${eventId}:`, err.message);
         }
+
+        // Always provide fallback odds
+        if (bookmakers.length === 0) {
+            bookmakers = [createDefaultBookmaker(homeTeam, awayTeam, sport)];
+        }
+
+        // Determine if live
+        const now = new Date();
+        const gameTime = new Date(commenceTime);
+        const isLive = (now - gameTime) > 0 && (now - gameTime) < (3 * 60 * 60 * 1000);
+
+        return {
+            game: {
+                id: eventId,
+                sport: extractBaseSport(sport),
+                sport_key: sport.toLowerCase(),
+                sport_title: formatSportTitle(sport),
+                league,
+                home_team: homeTeam,
+                away_team: awayTeam,
+                teams: [homeTeam, awayTeam],
+                commence_time: commenceTime,
+                is_live: isLive,
+                status: isLive ? 'live' : 'upcoming',
+                bookmakers,
+                fetched_at: new Date().toISOString(),
+                data_source: 'odds-api.io'
+            },
+            apiCalls: currentApiCalls
+        };
+    } catch (err) {
+        console.error('Error processing event with odds:', err);
+        return null;
     }
-    
-    // Always provide fallback odds
-    if (bookmakers.length === 0) {
-        bookmakers = generateRealisticBookmakers(homeTeam, awayTeam, sportKey);
-    }
-    
-    return {
-        id: event.id,
-        sport_key: sportKey.toLowerCase(),
-        sport: extractBaseSport(sportKey),
-        sport_title: formatSportTitle(sportKey),
-        league: extractLeague(sportKey),
-        home_team: homeTeam,
-        away_team: awayTeam,
-        teams: [homeTeam, awayTeam],
-        commence_time: commenceTime,
-        is_live: isLive,
-        status: isLive ? 'live' : 'upcoming',
-        bookmakers,
-        last_update: new Date().toISOString(),
-        data_source: 'odds-api.io'
-    };
 }
 
-// Enhanced odds processing
-function processOddsToBookmakers(oddsData, homeTeam, awayTeam, sport) {
+function processOddsData(oddsData, homeTeam, awayTeam, sport) {
     const bookmakers = [];
-    
     try {
         if (oddsData && oddsData.bookmakers) {
-            const bookmakerList = Array.isArray(oddsData.bookmakers) ? 
-                oddsData.bookmakers : Object.values(oddsData.bookmakers).flat();
-            
-            for (const bm of bookmakerList.slice(0, 4)) {
-                if (bm && bm.name && bm.odds) {
-                    bookmakers.push({
-                        key: bm.name.toLowerCase().replace(/\s+/g, '_'),
-                        title: bm.name,
-                        last_update: new Date().toISOString(),
-                        markets: [{
-                            key: 'h2h',
-                            last_update: new Date().toISOString(),
-                            outcomes: buildOutcomesFromOdds(bm.odds, homeTeam, awayTeam, sport)
-                        }]
-                    });
+            for (const key of Object.keys(oddsData.bookmakers)) {
+                const list = oddsData.bookmakers[key];
+                if (Array.isArray(list)) {
+                    for (const bm of list.slice(0, 4)) { // More bookmakers
+                        if (bm && bm.name && bm.odds) {
+                            bookmakers.push({
+                                key: bm.name.toLowerCase().replace(/\s+/g, '_'),
+                                title: bm.name,
+                                last_update: new Date().toISOString(),
+                                markets: [{
+                                    key: 'h2h',
+                                    last_update: new Date().toISOString(),
+                                    outcomes: buildOutcomes(bm.odds, homeTeam, awayTeam, sport)
+                                }]
+                            });
+                        }
+                    }
                 }
             }
         }
-    } catch (error) {
-        console.error('Error processing odds:', error.message);
+    } catch (err) {
+        console.error('Error parsing odds data:', err.message);
     }
-    
     return bookmakers;
 }
 
-function buildOutcomesFromOdds(oddsArray, homeTeam, awayTeam, sport) {
+function buildOutcomes(oddsArr, homeTeam, awayTeam, sport) {
     const outcomes = [];
-    
-    try {
-        if (Array.isArray(oddsArray)) {
-            for (const odds of oddsArray) {
-                if (odds.home) outcomes.push({ 
-                    name: homeTeam, 
-                    price: parseFloat(odds.home) || generateRealisticOdds() 
-                });
-                
-                if (odds.away) outcomes.push({ 
-                    name: awayTeam, 
-                    price: parseFloat(odds.away) || generateRealisticOdds() 
-                });
-                
-                // Add draw for sports that have draws
-                if (odds.draw && !['basketball', 'tennis', 'baseball', 'americanfootball'].includes(sport)) {
-                    outcomes.push({ 
-                        name: 'Draw', 
-                        price: parseFloat(odds.draw) || generateRealisticOdds(3.0, 3.8) 
-                    });
-                }
-                
-                break; // Use first valid odds set
+    if (Array.isArray(oddsArr)) {
+        for (const o of oddsArr) {
+            if (o.home) outcomes.push({ name: homeTeam, price: parseFloat(o.home) || 2.0 });
+            if (o.away) outcomes.push({ name: awayTeam, price: parseFloat(o.away) || 2.0 });
+            if (o.draw && !['basketball', 'tennis', 'baseball', 'americanfootball'].includes(extractBaseSport(sport))) {
+                outcomes.push({ name: 'Draw', price: parseFloat(o.draw) || 3.0 });
             }
         }
-    } catch (error) {
-        console.error('Error building outcomes:', error.message);
     }
-    
     return outcomes.length > 0 ? outcomes : createDefaultOutcomes(homeTeam, awayTeam, sport);
 }
 
-// Generate realistic bookmakers for fallback
-function generateRealisticBookmakers(homeTeam, awayTeam, sport) {
-    const bookmakers = [
-        { key: 'bet365', title: 'Bet365' },
-        { key: 'pinnacle', title: 'Pinnacle' },
-        { key: 'william_hill', title: 'William Hill' },
-        { key: 'betfair', title: 'Betfair' },
-        { key: '1xbet', title: '1xBet' }
-    ];
-    
-    return bookmakers.slice(0, 3).map(bm => ({
-        ...bm,
+function createDefaultBookmaker(homeTeam, awayTeam, sport) {
+    const outcomes = createDefaultOutcomes(homeTeam, awayTeam, sport);
+    return { 
+        key: 'bet365', 
+        title: 'Bet365', 
         last_update: new Date().toISOString(),
-        markets: [{
-            key: 'h2h',
+        markets: [{ 
+            key: 'h2h', 
             last_update: new Date().toISOString(),
-            outcomes: createDefaultOutcomes(homeTeam, awayTeam, sport)
-        }]
-    }));
+            outcomes 
+        }] 
+    };
 }
 
 function createDefaultOutcomes(homeTeam, awayTeam, sport) {
-    // Ensure we have valid team names
-    const home = homeTeam || 'Home Team';
-    const away = awayTeam || 'Away Team';
-    
     const outcomes = [
-        { name: home, price: generateRealisticOdds(1.6, 3.2) },
-        { name: away, price: generateRealisticOdds(1.6, 3.2) }
+        { name: homeTeam, price: generateRealisticOdds(1.6, 3.5) },
+        { name: awayTeam, price: generateRealisticOdds(1.6, 3.5) }
     ];
     
-    // Add draw for sports that can have draws - with safe string checking
-    const sportLower = (sport && typeof sport === 'string') ? sport.toLowerCase() : '';
-    const noDrawSports = ['basketball', 'tennis', 'baseball', 'americanfootball', 'mma', 'boxing'];
-    
-    if (sportLower && !noDrawSports.includes(sportLower)) {
+    // Add draw for applicable sports
+    if (!['basketball', 'tennis', 'baseball', 'americanfootball', 'mma', 'boxing'].includes(extractBaseSport(sport))) {
         outcomes.push({ name: 'Draw', price: generateRealisticOdds(2.8, 4.2) });
     }
     
     return outcomes;
 }
 
-function generateRealisticOdds(min = 1.5, max = 4.5) {
+function generateRealisticOdds(min = 1.5, max = 4.0) {
     return parseFloat((Math.random() * (max - min) + min).toFixed(2));
 }
 
-// Enhanced utility functions
-function enhanceGameData(game) {
-    return {
-        ...game,
-        display_time: formatGameTime(game.commence_time),
-        time_until_start: getTimeUntilStart(game.commence_time),
-        betting_status: game.is_live ? 'live' : 'pre_match'
-    };
-}
-
-function formatGameTime(commenceTime) {
-    try {
-        const date = new Date(commenceTime);
-        return date.toLocaleString('he-IL', {
-            day: '2-digit',
-            month: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    } catch (error) {
-        return 'זמן לא ידוע';
-    }
-}
-
-function getTimeUntilStart(commenceTime) {
-    try {
-        const now = new Date();
-        const gameTime = new Date(commenceTime);
-        const diff = gameTime - now;
-        
-        if (diff < 0) return 'started';
-        
-        const hours = Math.floor(diff / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        
-        if (hours > 24) {
-            const days = Math.floor(hours / 24);
-            return `${days} days`;
-        }
-        
-        return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-    } catch (error) {
-        return 'unknown';
-    }
-}
-
 function extractBaseSport(sportKey) {
-    if (!sportKey || typeof sportKey !== 'string') {
-        console.log('⚠️ Invalid sportKey:', sportKey);
-        return 'unknown';
-    }
-    
+    if (!sportKey) return 'unknown';
     const key = sportKey.toLowerCase();
     if (key.includes('soccer')) return 'soccer';
     if (key.includes('basketball')) return 'basketball';
@@ -773,223 +394,142 @@ function extractBaseSport(sportKey) {
     if (key.includes('mma') || key.includes('boxing')) return 'mma';
     if (key.includes('golf')) return 'golf';
     if (key.includes('cricket')) return 'cricket';
-    return sportKey.split('_')[0] || 'unknown'; // fallback
+    return sportKey.split('_')[0] || 'unknown';
 }
 
-function extractLeague(sportKey) {
-    if (!sportKey || typeof sportKey !== 'string') {
-        return 'Unknown League';
-    }
-    
+function formatSportTitle(sportKey) {
+    if (!sportKey) return 'Unknown Sport';
+    return sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function formatLeagueName(sportKey) {
+    if (!sportKey) return 'League';
     const key = sportKey.toLowerCase();
+    
+    // Soccer leagues
     if (key.includes('epl')) return 'Premier League';
     if (key.includes('champs_league')) return 'Champions League';
     if (key.includes('la_liga')) return 'La Liga';
     if (key.includes('serie_a')) return 'Serie A';
     if (key.includes('bundesliga')) return 'Bundesliga';
     if (key.includes('ligue_one')) return 'Ligue 1';
+    if (key.includes('eredivisie')) return 'Eredivisie';
+    if (key.includes('primeira_liga')) return 'Primeira Liga';
+    if (key.includes('serie_a')) return 'Série A';
+    if (key.includes('liga_mx')) return 'Liga MX';
+    
+    // Other sports
     if (key.includes('nba')) return 'NBA';
     if (key.includes('nfl')) return 'NFL';
     if (key.includes('mlb')) return 'MLB';
     if (key.includes('nhl')) return 'NHL';
     if (key.includes('atp')) return 'ATP';
     if (key.includes('wta')) return 'WTA';
+    if (key.includes('euroleague')) return 'EuroLeague';
+    
     return formatSportTitle(sportKey);
 }
 
-function formatSportTitle(sportKey) {
-    if (!sportKey || typeof sportKey !== 'string') {
-        return 'Unknown Sport';
-    }
-    return sportKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-}
-
-function prioritizeSports(availableSports) {
-    // Ensure availableSports is an array and each sport has required properties
-    if (!Array.isArray(availableSports)) {
-        console.log('⚠️ availableSports is not an array:', availableSports);
-        return [];
-    }
-
-    const priority1 = availableSports.filter(s => 
-        s && s.key && typeof s.key === 'string' && 
-        (s.key.includes('soccer') || s.key.includes('basketball') || s.key.includes('nba'))
-    );
+function createDemoFallback() {
+    const now = new Date();
     
-    const priority2 = availableSports.filter(s => 
-        s && s.key && typeof s.key === 'string' &&
-        (s.key.includes('football') || s.key.includes('tennis') || s.key.includes('baseball'))
-    );
-    
-    const priority3 = availableSports.filter(s => 
-        s && s.key && typeof s.key === 'string' &&
-        (s.key.includes('hockey') || s.key.includes('mma') || s.key.includes('golf'))
-    );
-    
-    const others = availableSports.filter(s => 
-        s && s.key && typeof s.key === 'string' &&
-        !priority1.includes(s) && !priority2.includes(s) && !priority3.includes(s)
-    );
-    
-    return [...priority1, ...priority2, ...priority3, ...others];
-}
-
-// Cache management functions
-function updateEnhancedCache(freshData, now) {
-    const { games } = freshData;
-    
-    // Categorize games by time
-    const liveGames = games.filter(g => g.is_live);
-    const todayGames = games.filter(g => {
-        const gameTime = new Date(g.commence_time);
-        const today = new Date();
-        return !g.is_live && 
-               gameTime.toDateString() === today.toDateString();
-    });
-    const weekGames = games.filter(g => {
-        const gameTime = new Date(g.commence_time);
-        const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-        return !g.is_live && 
-               gameTime > new Date() && 
-               gameTime <= weekFromNow;
-    });
-    const longTermGames = games.filter(g => {
-        const gameTime = new Date(g.commence_time);
-        const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-        return gameTime > weekFromNow;
-    });
-    
-    // Update cache tiers
-    enhancedCache.liveGames = {
-        data: liveGames,
-        timestamp: now.toISOString(),
-        expires: new Date(now.getTime() + CACHE_CONFIG.LIVE_GAMES)
+    return {
+        success: true,
+        total_games: 8,
+        games: [
+            {
+                id: 'demo_1',
+                sport: 'soccer',
+                sport_key: 'soccer_epl',
+                sport_title: 'Premier League',
+                league: 'Premier League',
+                home_team: 'Manchester City',
+                away_team: 'Liverpool',
+                teams: ['Manchester City', 'Liverpool'],
+                commence_time: new Date(now.getTime() - 30 * 60 * 1000).toISOString(),
+                is_live: true,
+                status: 'live',
+                bookmakers: [{
+                    key: 'bet365',
+                    title: 'Bet365',
+                    last_update: new Date().toISOString(),
+                    markets: [{
+                        key: 'h2h',
+                        last_update: new Date().toISOString(),
+                        outcomes: [
+                            { name: 'Manchester City', price: 2.1 },
+                            { name: 'Liverpool', price: 3.4 },
+                            { name: 'Draw', price: 3.2 }
+                        ]
+                    }]
+                }],
+                data_source: 'demo'
+            },
+            {
+                id: 'demo_2',
+                sport: 'basketball',
+                sport_key: 'basketball_nba',
+                sport_title: 'NBA',
+                league: 'NBA',
+                home_team: 'Los Angeles Lakers',
+                away_team: 'Boston Celtics',
+                teams: ['Los Angeles Lakers', 'Boston Celtics'],
+                commence_time: new Date(now.getTime() - 45 * 60 * 1000).toISOString(),
+                is_live: true,
+                status: 'live',
+                bookmakers: [{
+                    key: 'pinnacle',
+                    title: 'Pinnacle',
+                    last_update: new Date().toISOString(),
+                    markets: [{
+                        key: 'h2h',
+                        last_update: new Date().toISOString(),
+                        outcomes: [
+                            { name: 'Los Angeles Lakers', price: 1.9 },
+                            { name: 'Boston Celtics', price: 2.0 }
+                        ]
+                    }]
+                }],
+                data_source: 'demo'
+            },
+            {
+                id: 'demo_3',
+                sport: 'soccer',
+                sport_key: 'soccer_spain_la_liga',
+                sport_title: 'La Liga',
+                league: 'La Liga',
+                home_team: 'Real Madrid',
+                away_team: 'FC Barcelona',
+                teams: ['Real Madrid', 'FC Barcelona'],
+                commence_time: new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString(),
+                is_live: false,
+                status: 'upcoming',
+                bookmakers: [{
+                    key: 'bet365',
+                    title: 'Bet365',
+                    last_update: new Date().toISOString(),
+                    markets: [{
+                        key: 'h2h',
+                        last_update: new Date().toISOString(),
+                        outcomes: [
+                            { name: 'Real Madrid', price: 2.3 },
+                            { name: 'FC Barcelona', price: 2.9 },
+                            { name: 'Draw', price: 3.1 }
+                        ]
+                    }]
+                }],
+                data_source: 'demo'
+            }
+        ],
+        timestamp: new Date().toISOString(),
+        source: 'Demo Fallback',
+        api_calls_made: 0,
+        sports_processed: 3,
+        message: 'Demo data - API unavailable',
+        demo_data: true
     };
-    
-    enhancedCache.todayGames = {
-        data: todayGames,
-        timestamp: now.toISOString(),
-        expires: new Date(now.getTime() + CACHE_CONFIG.UPCOMING_TODAY)
-    };
-    
-    enhancedCache.weekGames = {
-        data: weekGames,
-        timestamp: now.toISOString(),
-        expires: new Date(now.getTime() + CACHE_CONFIG.UPCOMING_WEEK)
-    };
-    
-    enhancedCache.longTermGames = {
-        data: longTermGames,
-        timestamp: now.toISOString(),
-        expires: new Date(now.getTime() + CACHE_CONFIG.LONG_TERM)
-    };
-    
-    // Update metrics
-    enhancedCache.apiMetrics.lastSuccessfulFetch = now;
-}
-
-function isCacheValid(cacheEntry, now) {
-    return cacheEntry && 
-           cacheEntry.data && 
-           cacheEntry.expires && 
-           new Date(cacheEntry.expires) > now;
-}
-
-function removeDuplicateGames(games) {
-    const seen = new Set();
-    return games.filter(game => {
-        const key = `${game.home_team}_vs_${game.away_team}_${game.commence_time}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-}
-
-// Utility functions
-function calculateOptimalDelay() {
-    const usage = RATE_LIMIT.CURRENT_HOUR_CALLS / RATE_LIMIT.MAX_CALLS_PER_HOUR;
-    if (usage > 0.8) return 500; // Slow down when near limit
-    if (usage > 0.6) return 300;
-    return 200; // Default delay
 }
 
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function getCurrentRateLimitInfo() {
-    return {
-        calls_this_hour: RATE_LIMIT.CURRENT_HOUR_CALLS,
-        calls_remaining_hour: RATE_LIMIT.MAX_CALLS_PER_HOUR - RATE_LIMIT.CURRENT_HOUR_CALLS,
-        calls_this_minute: RATE_LIMIT.CURRENT_MINUTE_CALLS,
-        calls_remaining_minute: RATE_LIMIT.MAX_CALLS_PER_MINUTE - RATE_LIMIT.CURRENT_MINUTE_CALLS,
-        hour_resets_at: new Date(RATE_LIMIT.HOUR_RESET).toISOString(),
-        minute_resets_at: new Date(RATE_LIMIT.MINUTE_RESET).toISOString()
-    };
-}
-
-function getSecondsUntilReset() {
-    const now = Date.now();
-    const minuteReset = Math.ceil((RATE_LIMIT.MINUTE_RESET - now) / 1000);
-    const hourReset = Math.ceil((RATE_LIMIT.HOUR_RESET - now) / 1000);
-    return Math.min(minuteReset, hourReset, 60);
-}
-
-function hasAnyValidCache() {
-    const now = new Date();
-    return isCacheValid(enhancedCache.liveGames, now) ||
-           isCacheValid(enhancedCache.todayGames, now) ||
-           isCacheValid(enhancedCache.weekGames, now) ||
-           isCacheValid(enhancedCache.longTermGames, now);
-}
-
-function getStaleEmergencyData() {
-    const allGames = [
-        ...(enhancedCache.liveGames.data || []),
-        ...(enhancedCache.todayGames.data || []),
-        ...(enhancedCache.weekGames.data || []),
-        ...(enhancedCache.longTermGames.data || [])
-    ];
-    
-    if (allGames.length === 0) return null;
-    
-    return {
-        total_games: allGames.length,
-        games: removeDuplicateGames(allGames).sort((a, b) => 
-            new Date(a.commence_time) - new Date(b.commence_time)
-        ),
-        data_age_warning: 'This is cached data that may be outdated'
-    };
-}
-
-function getCacheInfo() {
-    const now = new Date();
-    return {
-        live_games: enhancedCache.liveGames.data ? enhancedCache.liveGames.data.length : 0,
-        today_games: enhancedCache.todayGames.data ? enhancedCache.todayGames.data.length : 0,
-        week_games: enhancedCache.weekGames.data ? enhancedCache.weekGames.data.length : 0,
-        longterm_games: enhancedCache.longTermGames.data ? enhancedCache.longTermGames.data.length : 0,
-        cache_hits_total: enhancedCache.apiMetrics.cacheHits,
-        last_successful_fetch: enhancedCache.apiMetrics.lastSuccessfulFetch
-    };
-}
-
-function getNextUpdateEstimate(games) {
-    const liveGamesCount = games.filter(g => g.is_live).length;
-    
-    if (liveGamesCount > 0) {
-        return new Date(Date.now() + CACHE_CONFIG.LIVE_GAMES).toISOString();
-    }
-    
-    const upcomingGames = games.filter(g => {
-        const gameTime = new Date(g.commence_time);
-        const hoursUntilGame = (gameTime - new Date()) / (1000 * 60 * 60);
-        return hoursUntilGame <= 24 && hoursUntilGame > 0;
-    });
-    
-    if (upcomingGames.length > 0) {
-        return new Date(Date.now() + CACHE_CONFIG.UPCOMING_TODAY).toISOString();
-    }
-    
-    return new Date(Date.now() + CACHE_CONFIG.UPCOMING_WEEK).toISOString();
 }
