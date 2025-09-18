@@ -104,67 +104,64 @@ async function fetchFromCorrectOddsApiIo() {
     // Base URL for Odds-API.io v3
     const baseUrl = 'https://api.odds-api.io/v3';
     
-    // First, try to get available sports/leagues
-    let availableSports = [];
-    
-    // Try common sport slug formats that might work
-    const sportSlugsToTry = [
-        'football',
-        'basketball',
-        'soccer',
-        'tennis',
-        'american-football',
-        'premier-league',
-        'champions-league',
-        'nba',
-        'nfl',
-        'la-liga',
-        'serie-a',
-        'bundesliga',
-        'ligue-1',
-        'epl'
-    ];
+    // First, try to get available leagues for different sports
+    const sportsToCheck = ['football', 'basketball', 'soccer', 'tennis'];
+    let availableLeagues = [];
 
-    console.log('Starting Odds-API.io data fetch with correct sport slugs...');
+    console.log('Starting Odds-API.io data fetch using /leagues endpoint...');
 
-    // Step 1: Try to get bookmakers first (to verify API key works)
-    try {
-        console.log('Step 1: Testing API key with bookmakers endpoint...');
-        const bookmakersUrl = `${baseUrl}/bookmakers?apiKey=${ODDS_API_KEY}`;
-        console.log('Bookmakers URL:', bookmakersUrl.replace(ODDS_API_KEY, 'HIDDEN'));
-        
-        totalApiCalls++;
-        const bookmakersResponse = await fetch(bookmakersUrl, {
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'YakirBet/1.0'
+    // Step 1: Get available leagues for each sport
+    for (const sport of sportsToCheck) {
+        try {
+            console.log(`Getting leagues for sport: ${sport}...`);
+            const leaguesUrl = `${baseUrl}/leagues?sport=${sport}&apiKey=${ODDS_API_KEY}`;
+            console.log(`Leagues URL: ${leaguesUrl.replace(ODDS_API_KEY, 'HIDDEN')}`);
+            
+            totalApiCalls++;
+            const leaguesResponse = await fetch(leaguesUrl, {
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'YakirBet/1.0'
+                }
+            });
+
+            console.log(`Leagues response for ${sport}: ${leaguesResponse.status}`);
+
+            if (leaguesResponse.ok) {
+                const leagues = await leaguesResponse.json();
+                console.log(`Got leagues for ${sport}:`, Array.isArray(leagues) ? leagues.length : 'not array');
+                
+                if (Array.isArray(leagues) && leagues.length > 0) {
+                    // Add sport context to each league
+                    const leaguesWithSport = leagues.slice(0, 3).map(league => ({
+                        ...league,
+                        parentSport: sport
+                    }));
+                    availableLeagues.push(...leaguesWithSport);
+                    console.log(`✅ Found ${leagues.length} leagues for ${sport}`);
+                }
+            } else {
+                const errorText = await leaguesResponse.text();
+                console.log(`Leagues failed for ${sport}: ${errorText}`);
             }
-        });
 
-        console.log('Bookmakers response status:', bookmakersResponse.status);
-        
-        if (bookmakersResponse.ok) {
-            const bookmakers = await bookmakersResponse.json();
-            console.log('✅ API key works! Got bookmakers:', Array.isArray(bookmakers) ? bookmakers.length : 'object');
-        } else {
-            const errorText = await bookmakersResponse.text();
-            console.log('❌ Bookmakers endpoint failed:', errorText);
-            // Don't throw error, continue with sport slugs
+            await new Promise(resolve => setTimeout(resolve, 300));
+        } catch (leagueError) {
+            console.error(`Error getting leagues for ${sport}:`, leagueError.message);
         }
-    } catch (bookmakersError) {
-        console.error('Bookmakers test failed:', bookmakersError.message);
-        errors.push({
-            step: 'bookmakers_test',
-            error: bookmakersError.message,
-            timestamp: new Date().toISOString()
-        });
     }
 
-    // Step 2: Try different sport slug formats
-    for (const sportSlug of sportSlugsToTry) {
+    console.log(`Total available leagues: ${availableLeagues.length}`);
+
+    // Step 2: Get events for each available league
+    for (const league of availableLeagues.slice(0, 8)) { // Limit to prevent timeout
         try {
-            console.log(`Step 2: Getting events for ${sportSlug}...`);
-            const eventsUrl = `${baseUrl}/events?sport=${sportSlug}&apiKey=${ODDS_API_KEY}`;
+            const leagueSlug = league.slug;
+            const leagueName = league.name;
+            const parentSport = league.parentSport;
+            
+            console.log(`Getting events for league: ${leagueName} (${leagueSlug})...`);
+            const eventsUrl = `${baseUrl}/events?sport=${leagueSlug}&apiKey=${ODDS_API_KEY}`;
             console.log(`Events URL: ${eventsUrl.replace(ODDS_API_KEY, 'HIDDEN')}`);
             
             totalApiCalls++;
@@ -175,14 +172,14 @@ async function fetchFromCorrectOddsApiIo() {
                 }
             });
 
-            console.log(`Events response for ${sportSlug}:`, eventsResponse.status);
+            console.log(`Events response for ${leagueSlug}: ${eventsResponse.status}`);
 
             if (!eventsResponse.ok) {
                 const errorText = await eventsResponse.text();
-                console.log(`Events failed for ${sportSlug}:`, errorText);
+                console.log(`Events failed for ${leagueSlug}: ${errorText}`);
                 
                 errors.push({
-                    sport: sportSlug,
+                    league: leagueSlug,
                     step: 'events',
                     error: `HTTP ${eventsResponse.status}: ${errorText}`,
                     timestamp: new Date().toISOString()
@@ -191,24 +188,24 @@ async function fetchFromCorrectOddsApiIo() {
             }
 
             const events = await eventsResponse.json();
-            console.log(`Got events for ${sportSlug}:`, Array.isArray(events) ? events.length : 'not array');
+            console.log(`Got events for ${leagueSlug}:`, Array.isArray(events) ? events.length : 'not array');
 
             if (!Array.isArray(events) || events.length === 0) {
-                console.log(`No events found for ${sportSlug}`);
+                console.log(`No events found for ${leagueSlug}`);
                 continue;
             }
 
-            // SUCCESS! We found a working sport slug
-            console.log(`✅ SUCCESS: Found ${events.length} events for sport slug: ${sportSlug}`);
+            // SUCCESS! We found events for this league
+            console.log(`✅ SUCCESS: Found ${events.length} events for league: ${leagueName}`);
             
-            // Process events and try to get odds for each
-            const limitedEvents = events.slice(0, 5); // Limit to prevent timeout
-            console.log(`Processing ${limitedEvents.length} events for ${sportSlug}...`);
+            // Process events
+            const limitedEvents = events.slice(0, 3); // Limit per league
+            console.log(`Processing ${limitedEvents.length} events for ${leagueName}...`);
 
             for (const event of limitedEvents) {
                 try {
                     // Create game object from event
-                    const processedGame = await processEventToGame(event, sportSlug, baseUrl, totalApiCalls);
+                    const processedGame = await processEventToGame(event, parentSport, baseUrl, totalApiCalls, leagueName);
                     if (processedGame) {
                         allGames.push(processedGame.game);
                         totalApiCalls = processedGame.apiCalls;
@@ -222,24 +219,21 @@ async function fetchFromCorrectOddsApiIo() {
                 }
             }
 
-            // If we have games from this sport, try one more sport slug then stop
-            if (allGames.length > 0) {
-                console.log(`Got ${allGames.length} games from ${sportSlug}, trying one more sport...`);
-                // Continue to try one more sport for variety
-                if (allGames.length >= 5) {
-                    break;
-                }
+            // If we have games from this league, continue with next league
+            if (allGames.length >= 15) {
+                console.log(`Got enough games (${allGames.length}), stopping early`);
+                break;
             }
 
-            // Delay between sports
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Small delay between leagues
+            await new Promise(resolve => setTimeout(resolve, 300));
 
-        } catch (sportError) {
-            console.error(`Error with sport ${sportSlug}:`, sportError.message);
+        } catch (leagueError) {
+            console.error(`Error with league ${league.slug}:`, leagueError.message);
             errors.push({
-                sport: sportSlug,
-                step: 'sport_processing',
-                error: sportError.message,
+                league: league.slug,
+                step: 'league_processing',
+                error: leagueError.message,
                 timestamp: new Date().toISOString()
             });
         }
@@ -302,19 +296,20 @@ async function fetchFromCorrectOddsApiIo() {
         cache_duration_hours: CACHE_DURATION / (1000 * 60 * 60),
         errors: errors.length > 0 ? errors : undefined,
         debug_info: {
-            sports_tried: sportsToTry,
-            endpoints_used: ['/bookmakers', '/events', '/events/search'],
+            leagues_tried: availableLeagues.length,
+            sports_checked: sportsToCheck,
+            endpoints_used: ['/leagues', '/events', '/events/search'],
             base_url: baseUrl
         }
     };
 }
 
-async function processEventToGame(event, sportHint, baseUrl, currentApiCalls) {
+async function processEventToGame(event, sportHint, baseUrl, currentApiCalls, leagueName) {
     try {
         const gameId = event.id || event.event_id || `event_${Date.now()}`;
         const homeTeam = event.home_team || event.home || event.homeTeam || event.team1 || 'Home';
         const awayTeam = event.away_team || event.away || event.awayTeam || event.team2 || 'Away';
-        const league = event.league || event.competition || event.tournament || sportHint;
+        const league = leagueName || event.league || event.competition || event.tournament || sportHint;
         const commenceTime = event.commence_time || event.start_time || event.date || new Date().toISOString();
 
         // Skip if no real team names
