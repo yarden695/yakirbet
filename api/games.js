@@ -1,46 +1,144 @@
 // YakirBet Enhanced Backend - Based on Working Code + All Leagues
 const ODDS_API_KEY = 'f25c67ba69a80dfdf01a5473a8523871ed994145e618fba46117fa021caaacea';
 const CACHE_DURATION = 2 * 60 * 60 * 1000; // 2 hours - more frequent updates
+const LIVE_CACHE_DURATION = 30 * 1000; // 30 seconds for live line
 
-// Simple cache like the working code
+// Enhanced cache system for live line
 let gameCache = {
     data: null,
     timestamp: null,
     expires: null
 };
 
-// All major sports and leagues we want to fetch
+let liveCache = {
+    data: null,
+    timestamp: null,
+    expires: null
+};
+
+// All major sports and leagues from the friend's site + Hebrew translations
 const PRIORITY_SPORTS = [
-    // Soccer - All major leagues
+    // Soccer - כדורגל
     'soccer_epl', 'soccer_uefa_champs_league', 'soccer_spain_la_liga', 
     'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_france_ligue_one',
-    'soccer_uefa_europa_league', 'soccer_netherlands_eredivisie', 'soccer_portugal_primeira_liga',
-    'soccer_brazil_serie_a', 'soccer_argentina_primera_division', 'soccer_mexico_liga_mx',
+    'soccer_uefa_europa_league', 'soccer_uefa_europa_conference_league', 
+    'soccer_netherlands_eredivisie', 'soccer_portugal_primeira_liga',
+    'soccer_belgium_first_div', 'soccer_scotland_premiership', 'soccer_switzerland_superleague',
+    'soccer_austria_bundesliga', 'soccer_denmark_superliga', 'soccer_sweden_allsvenskan',
+    'soccer_norway_eliteserien', 'soccer_turkey_super_league', 'soccer_greece_super_league',
+    'soccer_russia_premier_league', 'soccer_ukraine_premier_league', 'soccer_poland_ekstraklasa',
+    'soccer_czech_republic_1', 'soccer_croatia_hnl', 'soccer_serbia_super_liga',
+    'soccer_brazil_serie_a', 'soccer_brazil_serie_b', 'soccer_argentina_primera_division', 
+    'soccer_colombia_primera_a', 'soccer_chile_primera_division', 'soccer_uruguay_primera_division',
+    'soccer_peru_primera_division', 'soccer_ecuador_primera_a', 'soccer_bolivia_liga_profesional',
+    'soccer_mexico_liga_mx', 'soccer_usa_mls', 'soccer_conmebol_copa_libertadores',
+    'soccer_conmebol_copa_sudamericana', 'soccer_fifa_world_cup', 'soccer_uefa_euro_championship',
+    'soccer_conmebol_copa_america', 'soccer_africa_cup_of_nations', 'soccer_asian_cup',
+    'soccer_england_championship', 'soccer_england_league1', 'soccer_england_league2',
+    'soccer_spain_segunda_division', 'soccer_italy_serie_b', 'soccer_germany_bundesliga2',
+    'soccer_france_ligue_two', 'soccer_japan_j_league', 'soccer_korea_k_league_1',
+    'soccer_australia_aleague', 'soccer_china_super_league', 'soccer_saudi_pro_league',
+    'soccer_uae_arabian_gulf_league', 'soccer_qatar_stars_league',
     
-    // Basketball
-    'basketball_nba', 'basketball_euroleague', 'basketball_ncaab',
-    'basketball_wnba', 'basketball_nbl',
+    // Basketball - כדורסל
+    'basketball_nba', 'basketball_euroleague', 'basketball_ncaab', 'basketball_wnba', 
+    'basketball_nbl', 'basketball_spain_acb', 'basketball_italy_lega_a', 
+    'basketball_germany_bbl', 'basketball_france_lnb', 'basketball_greece_a1',
+    'basketball_turkey_bsl', 'basketball_israel_bsl', 'basketball_russia_vbl',
+    'basketball_china_cba', 'basketball_australia_nbl', 'basketball_fiba_world_cup',
+    'basketball_olympics', 'basketball_ncaa_tournament',
     
-    // American Football
-    'americanfootball_nfl', 'americanfootball_ncaaf',
+    // American Football - פוטבול אמריקני
+    'americanfootball_nfl', 'americanfootball_ncaaf', 'americanfootball_cfl',
+    'americanfootball_nfl_super_bowl',
     
-    // Tennis
+    // Tennis - טניס
     'tennis_atp', 'tennis_wta', 'tennis_challenger_men', 'tennis_challenger_women',
+    'tennis_atp_french_open', 'tennis_atp_wimbledon', 'tennis_atp_us_open', 
+    'tennis_atp_australian_open', 'tennis_wta_french_open', 'tennis_wta_wimbledon',
+    'tennis_wta_us_open', 'tennis_wta_australian_open', 'tennis_davis_cup',
+    'tennis_fed_cup', 'tennis_olympics',
     
-    // Baseball
-    'baseball_mlb', 'baseball_ncaa',
+    // Baseball - בייסבול
+    'baseball_mlb', 'baseball_ncaa', 'baseball_world_series', 'baseball_world_baseball_classic',
+    'baseball_japan_npb', 'baseball_korea_kbo',
     
-    // Hockey
-    'icehockey_nhl', 'icehockey_khl', 'icehockey_ncaa',
+    // Ice Hockey - הוקי קרח
+    'icehockey_nhl', 'icehockey_khl', 'icehockey_ncaa', 'icehockey_sweden_hockey_league',
+    'icehockey_finland_liiga', 'icehockey_czech_extraliga', 'icehockey_slovakia_extraliga',
+    'icehockey_switzerland_nla', 'icehockey_germany_del', 'icehockey_austria_ebel',
+    'icehockey_world_championship', 'icehockey_olympics', 'icehockey_stanley_cup',
     
-    // Combat Sports
-    'mma_mixed_martial_arts', 'boxing_heavyweight',
+    // Combat Sports - ספורט קרב
+    'mma_mixed_martial_arts', 'boxing_heavyweight', 'boxing_welterweight', 'boxing_middleweight',
+    'boxing_light_heavyweight', 'boxing_cruiserweight', 'boxing_super_middleweight',
+    'boxing_light_welterweight', 'boxing_lightweight', 'boxing_super_featherweight',
+    'boxing_featherweight', 'boxing_super_bantamweight', 'boxing_bantamweight',
+    'boxing_super_flyweight', 'boxing_flyweight', 'boxing_light_flyweight',
     
-    // Other Popular Sports
-    'golf_pga_championship', 'golf_masters_tournament',
-    'cricket_big_bash', 'cricket_test_match',
-    'rugby_union_world_cup', 'aussierules_afl'
+    // Other Popular Sports - ספורט נוסף
+    'golf_pga_championship', 'golf_masters_tournament', 'golf_us_open', 'golf_the_open_championship',
+    'golf_ryder_cup', 'golf_olympics', 'cricket_big_bash', 'cricket_test_match',
+    'cricket_world_cup', 'cricket_t20_world_cup', 'cricket_ipl', 'cricket_county_championship',
+    'rugby_union_world_cup', 'rugby_league_world_cup', 'rugby_union_six_nations',
+    'rugby_union_rugby_championship', 'aussierules_afl', 'volleyball_world_championship',
+    'volleyball_olympics', 'handball_world_championship', 'handball_olympics',
+    'waterpolo_world_championship', 'waterpolo_olympics'
 ];
+
+// Hebrew translations for leagues and teams
+const HEBREW_TRANSLATIONS = {
+    // Leagues
+    'Premier League': 'הליגה האנגלית',
+    'La Liga': 'לה ליגה',
+    'Serie A': 'סרייה A',
+    'Bundesliga': 'בונדסליגה',
+    'Ligue 1': 'ליג 1',
+    'Champions League': 'ליגת האלופות',
+    'Europa League': 'ליגה האירופית',
+    'NBA': 'NBA',
+    'EuroLeague': 'יורוליג',
+    'NFL': 'NFL',
+    'MLB': 'MLB',
+    'NHL': 'NHL',
+    'ATP': 'ATP',
+    'WTA': 'WTA',
+    'UFC': 'UFC',
+    'Premier League Championship': 'אליפות הליגה האנגלית',
+    'World Cup': 'מונדיאל',
+    'Euro Championship': 'אליפות אירופה',
+    
+    // Common team translations (add more as needed)
+    'Manchester City': 'מנצ\'סטר סיטי',
+    'Manchester United': 'מנצ\'סטר יונייטד',
+    'Liverpool': 'ליברפול',
+    'Arsenal': 'ארסנל',
+    'Chelsea': 'צ\'לסי',
+    'Tottenham': 'טוטנהאם',
+    'Real Madrid': 'ריאל מדריד',
+    'FC Barcelona': 'ברצלונה',
+    'Atletico Madrid': 'אתלטיקו מדריד',
+    'Valencia': 'ולנסיה',
+    'Sevilla': 'סביליה',
+    'Juventus': 'יובנטוס',
+    'AC Milan': 'מילאן',
+    'Inter Milan': 'אינטר מילאן',
+    'Napoli': 'נאפולי',
+    'Roma': 'רומא',
+    'Bayern Munich': 'באיירן מינכן',
+    'Borussia Dortmund': 'בורוסיה דורטמונד',
+    'RB Leipzig': 'RB לייפציג',
+    'Bayer Leverkusen': 'באייר לברקוזן',
+    'Paris Saint-Germain': 'פאריס סן ז\'רמן',
+    'Marseille': 'מרסיי',
+    'Lyon': 'ליון',
+    'Monaco': 'מונאקו',
+    'Los Angeles Lakers': 'לוס אנג\'לס לייקרס',
+    'Boston Celtics': 'בוסטון סלטיקס',
+    'Golden State Warriors': 'גולדן סטייט ווריורס',
+    'Miami Heat': 'מיאמי היט',
+    'Chicago Bulls': 'שיקגו בולס'
+};
 
 export default async function handler(req, res) {
     // Simple CORS like working code
@@ -60,7 +158,20 @@ export default async function handler(req, res) {
 
     try {
         const now = new Date();
-        const { force = false } = req.query;
+        const { force = false, liveOnly = false } = req.query;
+
+        // Handle live line requests (for frequent updates)
+        if (liveOnly === 'true') {
+            const liveData = await fetchLiveUpdates();
+            if (liveData) {
+                return res.status(200).json({
+                    ...liveData,
+                    live_update: true,
+                    timestamp: now.toISOString(),
+                    message: 'Live line data updated'
+                });
+            }
+        }
 
         // Simple cache check like working code
         const isCacheValid = gameCache.data && 
@@ -244,7 +355,7 @@ async function fetchAllLeaguesData() {
     return {
         success: true,
         total_games: allGames.length,
-        games: allGames,
+        games: allGames.map(game => translateToHebrew(game)), // Add Hebrew translation
         timestamp: new Date().toISOString(),
         source: 'Odds-API.io',
         api_calls_made: totalApiCalls,
