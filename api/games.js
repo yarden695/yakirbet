@@ -381,7 +381,7 @@ function processGameData(rawGame, sportKey) {
 async function updateGameOdds(game) {
     // Update odds for a specific game (for live line)
     try {
-        const baseUrl = 'https://api.the-odds-api.com/v4';
+        const baseUrl = 'https://api.odds-api.io/v3';
         const url = `${baseUrl}/sports/${game.sport_key}/odds?apiKey=${ODDS_API_KEY}&eventIds=${game.id}&regions=us,uk,eu&markets=h2h&oddsFormat=decimal`;
         
         const response = await fetch(url, { 
